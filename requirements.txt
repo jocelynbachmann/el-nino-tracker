@@ -1,0 +1,11 @@
+# Everything for the notebooks (model/, pipeline/) and scripts in the repo root.
+# The server only needs server/requirements.txt.
+-r server/requirements.txt
+# model notebooks look up the team name through AWS STS
+boto3
+# pipeline/preprocess.ipynb reads the raw NetCDF files
+h5netcdf
+# cds_api.py downloads the C3S seasonal forecasts
+cdsapi
+# run the notebooks in Jupyter or VS Code
+ipykernel
