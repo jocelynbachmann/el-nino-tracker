@@ -20,7 +20,7 @@ import xarray as xr
 
 LAT_NAMES = ("latitude", "lat")
 LON_NAMES = ("longitude", "lon")
-ENS_NAMES = ("number", "realization", "member")
+ENS_NAMES = ("member", "number", "realization")
 
 
 def extract(path):
@@ -113,38 +113,49 @@ def main():
     ap.add_argument("--month", help="only this valid month, e.g. 2026-12")
     a = ap.parse_args()
 
-    for f in extract(a.path):
-        ds = open_any(f)
-        if a.inspect:
-            inspect(ds, f)
-            continue
+    files = sorted(extract(a.path))
+    if a.inspect:
+        print(f"{len(files)} file(s) in archive")
+        inspect(open_any(files[0]), files[0])
+        return
 
-        var = list(ds.data_vars)[0]
+    # The CDS NetCDF download is one file per ensemble member (..._r01i00p00, _r02..., etc.).
+    # Stack them along a 'member' dimension so they can be averaged together.
+    datasets = [open_any(f) for f in files]
+    ds = datasets[0]
+    var = list(ds.data_vars)[0]
+    if len(datasets) > 1:
+        da = xr.concat([d[var] for d in datasets], dim="member", coords="minimal",
+                       compat="override", join="override")
+    else:
         da = ds[var]
-        print(f"##### file: {os.path.basename(f)}   variable: {var}   dims: {dict(da.sizes)}\n")
-        lat, lon = pick(da.dims, LAT_NAMES), pick(da.dims, LON_NAMES)
-        ens = pick(da.dims, ENS_NAMES)
-        if ens:
-            da = da.mean(ens, skipna=True)  # ensemble mean
-        # convert 0-360 longitudes to -180..180 if needed
-        if (da[lon] > 180).any():
-            da = da.assign_coords({lon: ((da[lon] + 180) % 360) - 180})
 
-        other = [d for d in da.dims if d not in (lat, lon)]
-        if not other:
-            print_table(da, "(single field)", lat, lon)
+    lat, lon = pick(da.dims, LAT_NAMES), pick(da.dims, LON_NAMES)
+    ens = pick(da.dims, ENS_NAMES)
+    n_members = da.sizes[ens] if ens else 1
+    print(f"Variable '{var}': ensemble mean of {n_members} member(s)\n")
+    if ens:
+        da = da.mean(ens, skipna=True)
+    # convert 0-360 longitudes to -180..180 if needed
+    if (da[lon] > 180).any():
+        da = da.assign_coords({lon: ((da[lon] + 180) % 360) - 180})
+
+    other = [d for d in da.dims if d not in (lat, lon)]
+    if not other:
+        print_table(da, "(single field)", lat, lon)
+        return
+
+    lead = "forecastMonth" if "forecastMonth" in other else other[0]
+    labels = valid_months(ds, lead)
+    for d in other:
+        if d != lead:
+            da = da.isel({d: 0})
+    for i, label in enumerate(labels):
+        if a.month and label != a.month:
             continue
+        print_table(da.isel({lead: i}), label, lat, lon)
 
-        lead = "forecastMonth" if "forecastMonth" in other else other[0]
-        labels = valid_months(ds, lead)
-        for d in other:
-            if d != lead:
-                da = da.isel({d: 0})
-        for i, label in enumerate(labels):
-            if a.month and label != a.month:
-                continue
-            print_table(da.isel({lead: i}), label, lat, lon)
-
+# python mld_table.py d397c0727b1f874927b577e0f835427b.zip --month 2026-12
 
 if __name__ == "__main__":
     main()
