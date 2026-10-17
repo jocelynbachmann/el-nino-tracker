@@ -1,0 +1,8 @@
+flask>=3.0
+xarray>=2024.6
+zarr>=3.0
+dask>=2024.6
+numpy
+pandas
+# only needed when ELNINO_DATA points at s3://
+s3fs
