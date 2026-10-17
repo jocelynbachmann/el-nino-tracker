@@ -78,13 +78,14 @@ def level(da, z):
         return da.sel(depth=z, method="nearest").drop_vars("depth")
     return da
 
+# These six are the inputs predict_mld() takes (step 13), so the model is trained on exactly them
 columns = {
     "sst":   level(oc.to, 0),                                    # sea surface temperature
     "sss":   level(oc.so, 0),                                    # sea surface salinity
+    "ssh":   oc.zo,                                              # sea surface height
     "u":     wd.eastward_wind,
     "v":     wd.northward_wind,
-    "speed": np.hypot(wd.eastward_wind, wd.northward_wind),
-    "tau":   wd.wind_stress_magnitude,                           # how hard wind pushes the surface
+    "speed": wd.wind_speed,
 }
 # Subsurface temperature/salinity. Strongly layered water is hard to mix, which keeps the
 # mixed layer shallow. Built but not yet used as features - worth trying.
@@ -109,7 +110,7 @@ df["month"] = df.time.dt.month
 #
 # Normals use training years (pre-2020) only, so no test-year data leaks into training.
 keys = ["month", "latitude", "longitude"]
-values = ["y", "sst", "sss", "tau", "u", "v", "speed"]
+values = ["y", "sst", "sss", "ssh", "u", "v", "speed"]
 normals = (df[df.time < "2020"].groupby(keys)[values].mean()
            .add_suffix("_clim").reset_index())
 df = df.merge(normals, on=keys, how="left").dropna()
@@ -196,7 +197,7 @@ df = df.merge(oni_m, on="ym", how="left").drop(columns="ym")
 
 
 # --- 7. Features and train/test split ---------------------------------------------
-feats = ["sst_anom", "sss_anom", "tau_anom", "u_anom", "v_anom", "speed_anom",  # vs normal
+feats = ["sst_anom", "sss_anom", "ssh_anom", "u_anom", "v_anom", "speed_anom",  # vs normal
          "y_clim", "sst_clim",                                                  # the normals
          "month", "t_years",
          "latitude", "longitude"] + ONI_FEATS
@@ -276,3 +277,46 @@ def predict_month(when):
     sub = df[df.time.dt.to_period("M") == pd.Period(when)].copy()
     sub["mld_pred"] = sub.y_clim + model.predict(sub[feats])
     return sub.set_index(["latitude", "longitude"])[["y", "mld_pred"]].to_xarray()
+
+
+# --- 13. Predict MLD from raw measurements --------------------------------------------
+# The model works on anomalies, so raw inputs are first compared with the normal for that
+# month and grid point (step 5). The ONI features come from the ONI file for that month;
+# beyond the end of the file they're left empty (NaN), which the model can handle.
+def predict_mld(temp, salinity, wind_speed, surface_height, north_wind, east_wind,
+                date, latitude, longitude):
+    """Predicted mixed-layer depth in metres for one month at one location.
+
+    temp             sea surface temperature, °C
+    salinity         sea surface salinity (same units as the data, ~32-34)
+    wind_speed       wind speed at 10 m, m/s
+    surface_height   sea surface height, m
+    north_wind       northward wind at 10 m, m/s
+    east_wind        eastward wind at 10 m, m/s
+    date             any date in the month, e.g. "2024-01"
+    latitude, longitude  inside the box (46-52°N, 134-120°W); snapped to the nearest grid point
+
+    Example: predict_mld(10.5, 32.4, 9.0, 0.35, 2.0, 5.5, "2024-01", 48.5, -128.0)
+    """
+    when = pd.Timestamp(date)
+    lats, lons = normals.latitude.unique(), normals.longitude.unique()
+    lat, lon = lats[np.abs(lats - latitude).argmin()], lons[np.abs(lons - longitude).argmin()]
+    if abs(lat - latitude) > 0.5 or abs(lon - longitude) > 0.5:
+        raise ValueError(f"({latitude}, {longitude}) is outside the model's area")
+    norm = normals[(normals.month == when.month) & (normals.latitude == lat) & (normals.longitude == lon)]
+    if norm.empty:
+        raise ValueError(f"No ocean data at grid point ({lat}, {lon}) - probably land")
+    norm = norm.iloc[0]
+
+    raw = {"sst": temp, "sss": salinity, "ssh": surface_height,
+           "u": east_wind, "v": north_wind, "speed": wind_speed}
+    x = {f"{k}_anom": v - norm[f"{k}_clim"] for k, v in raw.items()}
+    x.update(y_clim=norm.y_clim, sst_clim=norm.sst_clim, month=when.month,
+             t_years=(when - T0).total_seconds() / (365.25 * 24 * 3600),
+             latitude=lat, longitude=lon)
+    oni_row = oni_m[oni_m.ym == when.to_period("M").to_timestamp()]
+    for c in ONI_FEATS:
+        x[c] = oni_row[c].iloc[0] if len(oni_row) else np.nan
+
+    anomaly = model.predict(pd.DataFrame([x])[feats])[0]
+    return float(norm.y_clim + anomaly)
