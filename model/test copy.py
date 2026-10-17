@@ -1,29 +1,49 @@
-# STEP 2 - CONNECT TO THE DATA  (run every time you open the notebook)
-import boto3, s3fs, json
+"""
+Data checks + El Niño feature building. No model is trained here (see train copy.py).
+
+Loads the ocean/wind data and runs sanity checks on it, then turns the ONI file into
+El Niño labels, model inputs and forecast targets.
+
+Terms:
+  ONI      Oceanic Niño Index: tropical Pacific temperature vs normal, in °C (3-month average).
+  El Niño  ONI >= +0.5 for 5+ months in a row. La Niña: ONI <= -0.5 for 5+ months.
+  Feature  A model input column.   Target: the value the model learns to predict.
+  Lag      Value from N months ago. Lead: how many months ahead we predict.
+"""
+
+import json
+
+import boto3
+import numpy as np
+import pandas as pd
+import s3fs
 import xarray as xr
+import zarr
 
-DATA_FOLDER = "elnino"       # your team's data folder - no need to change this
 
-PROFILE = "hack-team"            # use the key you saved in Step 1 (the hub's own AWS login can't see this data)
+# --- 1. Connect to the data -------------------------------------------------------
+DATA_FOLDER = "elnino"
+PROFILE = "hack-team"           # AWS profile saved during setup
 BUCKET  = "ocean-hackathon-2026"
+
 fs = s3fs.S3FileSystem(profile=PROFILE)
 opts = {"profile": PROFILE}
 
-# Ask AWS which team this key belongs to, so you never have to type your team name
+# Work out the team name from the AWS key
 who = boto3.Session(profile_name=PROFILE).client("sts").get_caller_identity()["Arn"]
-TEAM = who.split("/")[-1]                      # e.g. "team-sound"
-TEAM_DIR = f"{BUCKET}/teams/{TEAM}"            # your team's workspace (you can save files here)
-DATA_DIR = f"{BUCKET}/data/{DATA_FOLDER}"      # your raw data (read-only)
+TEAM = who.split("/")[-1]
+TEAM_DIR = f"{BUCKET}/teams/{TEAM}"             # our workspace (writable)
+DATA_DIR = f"{BUCKET}/data/{DATA_FOLDER}"       # raw data (read-only)
 OUT_DIR  = f"{TEAM_DIR}/processed"
 
 print("Connected as:", TEAM)
 print("Raw data:    ", "s3://" + DATA_DIR)
 print("Your outputs:", "s3://" + TEAM_DIR)
 print(fs.ls(OUT_DIR))
+print("zarr version:", zarr.__version__)
 
-import zarr
-print(zarr.__version__)
-
+# Opened lazily: values are only downloaded when used.
+# *_clim = the long-term average ("normal") for each calendar month.
 ocean     = xr.open_zarr(f"s3://{OUT_DIR}/ocean_monthly.zarr",     storage_options=opts)
 clim      = xr.open_zarr(f"s3://{OUT_DIR}/climatology.zarr",       storage_options=opts)
 wind      = xr.open_zarr(f"s3://{OUT_DIR}/wind_monthly.zarr",      storage_options=opts)
@@ -31,6 +51,8 @@ wind_clim = xr.open_zarr(f"s3://{OUT_DIR}/wind_climatology.zarr",  storage_optio
 
 stores = {"ocean": ocean, "clim": clim, "wind": wind, "wind_clim": wind_clim}
 
+
+# --- 2. What's in each dataset ----------------------------------------------------
 for name, ds in stores.items():
     print(f"\n=== {name} ===  dims: {dict(ds.sizes)}")
     for v, da in ds.data_vars.items():
@@ -38,11 +60,8 @@ for name, ds in stores.items():
         print(f"  {v:24s} {str(da.dims):35s} {units}")
 
 
-
-import numpy as np
-import pandas as pd
-
 def coord_summary(da, name):
+    """One line per coordinate: count, first → last, and spacing."""
     v = da.values
     if v.size == 0:
         return f"  {name:10s} (empty)"
@@ -62,26 +81,28 @@ for name, ds in stores.items():
     for c in ds.coords:
         if ds[c].ndim == 1:
             print(coord_summary(ds[c], c))
-    # chunking of the first variable, useful for planning reads
+    # Storage chunk sizes, useful for planning how much to load at once
     v0 = next(iter(ds.data_vars))
     print(f"  chunks ({v0}): {ds[v0].encoding.get('chunks') or ds[v0].chunks}")
 
-# ---- Area cutout in plain words ----
+
+# --- 3. Sanity checks -------------------------------------------------------------
 lat, lon = ocean.latitude.values, ocean.longitude.values
 print("\n=== Area cutout (ocean grid) ===")
 print(f"  lat {lat.min():.2f}° to {lat.max():.2f}°, lon {lon.min():.2f}° to {lon.max():.2f}°")
 print(f"  lon convention: {'0–360' if lon.max() > 180 else '-180–180'}")
 print(f"  resolution ≈ {abs(np.median(np.diff(lat))):.3f}° lat × {abs(np.median(np.diff(lon))):.3f}° lon")
 
-# ---- Missing months in the time series ----
+# Missing months
 for name in ["ocean", "wind"]:
     t = pd.to_datetime(stores[name].time.values)
     full = pd.date_range(t.min().to_period("M").to_timestamp(),
                          t.max().to_period("M").to_timestamp(), freq="MS")
     missing = sorted(set(full.to_period("M")) - set(t.to_period("M")))
-    print(f"\n{name}: {len(t)} steps, expected {len(full)} monthly; missing: {missing[:10]}{' …' if len(missing) > 10 else ''}")
+    print(f"\n{name}: {len(t)} steps, expected {len(full)} monthly; "
+          f"missing: {missing[:10]}{' …' if len(missing) > 10 else ''}")
 
-# ---- Do ocean and wind grids match? ----
+# Ocean and wind must share grid points and months before they can be combined
 print("\n=== Grid alignment ===")
 for c in ["latitude", "longitude"]:
     a, b = ocean[c].values, wind[c].values
@@ -92,14 +113,15 @@ overlap = t_o.intersection(t_w)
 print(f"  time overlap: {len(overlap)} steps"
       + (f", {overlap.min():%Y-%m} → {overlap.max():%Y-%m}" if len(overlap) else ""))
 
-# ---- How much of the box is land (NaN) ----
+# Land points have no ocean values (NaN)
 frac_nan = float(ocean["to"].isel(time=0).isnull().mean())
 print(f"\nLand/NaN fraction in first ocean timestep: {frac_nan:.1%}")
 
-# ---- Time features for the model ----
-# t_years: continuous time (fractional years since the first timestep), so the model
-#          sees the date as one ordered number and can pick up long-term trends.
-# month:   separate categorical variable (1-12), so the model can still learn seasonality.
+
+# --- 4. Time features ---------------------------------------------------------------
+# Time is given to the model in two ways:
+#   t_years  continuous clock (years since start), so it can pick up long-term trends
+#   month    1-12 as a category, so it can learn seasons without treating 12 as "far" from 1
 T0 = pd.to_datetime(ocean.time.values).min()
 
 def add_time_features(df, time_col="time", t0=T0):
@@ -110,41 +132,26 @@ def add_time_features(df, time_col="time", t0=T0):
     return df
 
 def time_design_matrix(df):
-    """Numeric model inputs: continuous t_years + one-hot month (January is the baseline)."""
+    """t_years + month as 11 one-hot (1/0) columns, January being all zeros.
+    Only needed for models that require plain numbers (e.g. linear regression);
+    tree models like the one in train copy.py take `month` directly."""
     month_dummies = pd.get_dummies(df["month"], prefix="month", drop_first=True, dtype=float)
     return pd.concat([df[["t_years"]], month_dummies], axis=1)
 
 time_df = add_time_features(pd.DataFrame({"time": ocean.time.values}))
 print("\n=== Time features ===")
 print(time_df.head(13))
-print(time_design_matrix(time_df).head(3))
+print(time_design_matrix(time_df).head(10))
 
-# ---- El Niño / La Niña events from the ONI file ----
-# ONI = 3-month running mean of Niño-3.4 SST anomaly. NOAA's event rule: ONI >= +0.5
-# (El Niño) or <= -0.5 (La Niña) for at least 5 consecutive overlapping seasons.
-#
-# How ONI enters the model (keeps it from cheating):
-#   * Event labels look ahead (a run must last 5 months), so they are TARGETS only,
-#     shifted forward by the lead time. Never use them as inputs.
-#   * The ONI value for month t is centred on t, so it includes month t+1. Only ONI from
-#     t-1 and earlier is known at the end of month t, so every ONI input is lagged >= 1.
-#   * Provisional ONI values may still be revised, so they get a lower sample weight.
-ONI_PATH = f"ocean-hackathon-2026/teams/team-elnino/processed/enso.json"
-EL_NINO_THRESHOLD = 0.5
-LA_NINA_THRESHOLD = -0.5
-MIN_EVENT_MONTHS = 5
-LEADS = (1, 3, 6)                # months ahead the model forecasts
-PROVISIONAL_WEIGHT = 0.5
+
+# --- 5. Load ONI --------------------------------------------------------------------
+ONI_PATH = "ocean-hackathon-2026/teams/team-elnino/processed/enso.json"
 
 def load_oni(path=ONI_PATH):
-    """Read the ONI file from S3 and return one row per month, sorted by time:
-      time        Timestamp, first day of the month
-      oni         float
-      phase       str ("el_nino" / "la_nina" / "neutral", as given in the file)
-      provisional bool
+    """Read enso.json -> DataFrame[time, oni, phase, provisional], one row per month.
 
-    The file is a JSON list of {"month": "1993-01", "oni": 0.13, "phase": "neutral",
-    "provisional": false}.
+    File format: [{"month": "1993-01", "oni": 0.13, "phase": "neutral", "provisional": false}, ...]
+    `provisional` marks recent values NOAA may still revise.
     """
     with fs.open(path) as f:
         oni = pd.DataFrame(json.load(f))
@@ -154,105 +161,130 @@ def load_oni(path=ONI_PATH):
     return (oni[["time", "oni", "phase", "provisional"]]
             .drop_duplicates("time", keep="last").sort_values("time").reset_index(drop=True))
 
-def _event_runs(mask, min_len):
-    """Number each run of True values lasting >= min_len months (1, 2, ...); 0 = not in an event."""
-    run = (mask != mask.shift()).cumsum()
-    run_len = mask.groupby(run).transform("size")
-    in_event = mask & (run_len >= min_len)
-    ids = run.where(in_event)
-    return ids.map({r: i + 1 for i, r in enumerate(ids.dropna().unique())}).fillna(0).astype(int)
+oni_raw = load_oni()
+print(f"\n=== ONI data ===  {len(oni_raw)} months, {oni_raw.time.min():%Y-%m} → {oni_raw.time.max():%Y-%m}")
+print(oni_raw.head(12))
 
-def _months_in_streak(mask):
-    """Months the condition has held up to and including each row, counting backwards only."""
-    run = (mask != mask.shift()).cumsum()
-    return mask.astype(int).groupby(run).cumsum()
+
+# --- 6. Label El Niño / La Niña events --------------------------------------------
+# NOAA's definition: the threshold must hold for 5+ consecutive months. A short warm
+# spell is not an event, so a simple `oni >= 0.5` check isn't enough.
+EL_NINO_THRESHOLD = 0.5
+LA_NINA_THRESHOLD = -0.5
+MIN_EVENT_MONTHS = 5
+
+def event_ids(condition, min_months):
+    """Number each run of True lasting >= min_months as 1, 2, 3...; 0 elsewhere."""
+    stretch = (condition != condition.shift()).cumsum()            # id per run of equal values
+    stretch_length = condition.groupby(stretch).transform("size")
+    in_event = condition & (stretch_length >= min_months)
+    return stretch.where(in_event).rank(method="dense").fillna(0).astype(int)
+
+def streak_length(condition):
+    """Consecutive months `condition` has been True, up to and including each row."""
+    stretch = (condition != condition.shift()).cumsum()
+    return condition.astype(int).groupby(stretch).cumsum()
 
 def strength_category(peak_oni):
     a = abs(peak_oni)
     return "very strong" if a >= 2.0 else "strong" if a >= 1.5 else "moderate" if a >= 1.0 else "weak"
 
-def build_oni_features(oni_df, leads=LEADS):
-    df = oni_df.set_index("time").sort_index()
-    df = df.reindex(pd.date_range(df.index.min(), df.index.max(), freq="MS"))  # find missing months
-    df.index.name = "time"
-    oni = df["oni"]
+# Reindex to a full monthly calendar so shifts/lags below are always whole months
+oni_df = oni_raw.set_index("time").sort_index()
+oni_df = oni_df.reindex(pd.date_range(oni_df.index.min(), oni_df.index.max(), freq="MS"))
+oni_df.index.name = "time"
+oni = oni_df["oni"]
 
-    # Event labels (look ahead, so targets only)
-    df["el_nino_event_id"] = _event_runs(oni >= EL_NINO_THRESHOLD, MIN_EVENT_MONTHS)
-    df["la_nina_event_id"] = _event_runs(oni <= LA_NINA_THRESHOLD, MIN_EVENT_MONTHS)
-    df["el_nino"] = (df["el_nino_event_id"] > 0).astype(float)
-    df["la_nina"] = (df["la_nina_event_id"] > 0).astype(float)
-    # A run still going at the end of the record may yet reach 5 months: unknown, not "no event"
-    for col, mask in (("el_nino", oni >= EL_NINO_THRESHOLD), ("la_nina", oni <= LA_NINA_THRESHOLD)):
-        tail = int(_months_in_streak(mask).iloc[-1])
-        if 0 < tail < MIN_EVENT_MONTHS:
-            df.loc[df.index[-tail:], col] = np.nan
-    df["enso_state"] = np.select([df["el_nino"] == 1, df["la_nina"] == 1], [1, -1], 0)  # +1 / 0 / -1
-    df.loc[df["el_nino"].isna() | df["la_nina"].isna(), "enso_state"] = np.nan
-    onset = (df["el_nino"] == 1) & (df["el_nino"].shift(fill_value=0) == 0)
+oni_df["el_nino_event_id"] = event_ids(oni >= EL_NINO_THRESHOLD, MIN_EVENT_MONTHS)
+oni_df["la_nina_event_id"] = event_ids(oni <= LA_NINA_THRESHOLD, MIN_EVENT_MONTHS)
+oni_df["el_nino"] = (oni_df["el_nino_event_id"] > 0).astype(float)
+oni_df["la_nina"] = (oni_df["la_nina_event_id"] > 0).astype(float)
 
-    # Causal inputs: only ONI from month t-1 and earlier
-    feats = pd.DataFrame(index=df.index)
-    for lag in (1, 2, 3, 6, 12):
-        feats[f"oni_lag{lag}"] = oni.shift(lag)
-    feats["oni_trend_3m"] = oni.shift(1) - oni.shift(4)                 # warming or cooling
-    feats["oni_mean_12m"] = oni.shift(1).rolling(12, min_periods=6).mean()
-    feats["warm_streak_months"] = _months_in_streak(oni.shift(1) >= EL_NINO_THRESHOLD)
-    feats["cold_streak_months"] = _months_in_streak(oni.shift(1) <= LA_NINA_THRESHOLD)
+# A spell still running at the end of the data, shorter than 5 months, may still become an
+# event. Mark it unknown (NaN) rather than "no event", or we'd train on a wrong label.
+for col, condition in (("el_nino", oni >= EL_NINO_THRESHOLD), ("la_nina", oni <= LA_NINA_THRESHOLD)):
+    months_so_far = int(streak_length(condition).iloc[-1])
+    if 0 < months_so_far < MIN_EVENT_MONTHS:
+        oni_df.loc[oni_df.index[-months_so_far:], col] = np.nan
 
-    # Targets at each lead: event flag, onset within the window, and the ONI value itself.
-    # Train the classifier on `el_nino_in_{h}m`; predicting `oni_in_{h}m` as well also gives strength.
-    targets = pd.DataFrame(index=df.index)
-    for h in leads:
-        targets[f"el_nino_in_{h}m"] = df["el_nino"].shift(-h)
-        targets[f"la_nina_in_{h}m"] = df["la_nina"].shift(-h)
-        targets[f"enso_state_in_{h}m"] = df["enso_state"].shift(-h)
-        targets[f"oni_in_{h}m"] = oni.shift(-h)
-        # 1 if a new El Niño starts in months t+1 .. t+h (early-warning target)
-        onset_h = onset[::-1].rolling(h, min_periods=1).max()[::-1].shift(-1).astype(float)
-        onset_h.iloc[-h:] = np.nan                                      # window runs past the data
-        targets[f"el_nino_onset_within_{h}m"] = onset_h
-        targets[f"target_provisional_{h}m"] = df["provisional"].shift(-h).astype("boolean")
+# +1 El Niño, 0 neutral, -1 La Niña, NaN unknown
+oni_df["enso_state"] = np.select([oni_df["el_nino"] == 1, oni_df["la_nina"] == 1], [1, -1], 0)
+oni_df.loc[oni_df["el_nino"].isna() | oni_df["la_nina"].isna(), "enso_state"] = np.nan
 
-    # One row per event, for checking results by event and strength
-    events = (df[df["el_nino_event_id"] > 0].reset_index()
-              .groupby("el_nino_event_id")
-              .agg(start=("time", "min"), end=("time", "max"), months=("oni", "size"),
-                   peak_oni=("oni", "max")))
-    events["strength"] = events["peak_oni"].map(strength_category)
+el_nino_events = (oni_df[oni_df["el_nino_event_id"] > 0].reset_index()
+                  .groupby("el_nino_event_id")
+                  .agg(start=("time", "min"), end=("time", "max"), months=("oni", "size"),
+                       peak_oni=("oni", "max")))
+el_nino_events["strength"] = el_nino_events["peak_oni"].map(strength_category)
 
-    return df, feats, targets, events
+print("\n=== El Niño events (ONI >= 0.5 for >= 5 months) ===")
+print(el_nino_events)
+# Our labels vs the file's `phase` column - should agree except the latest unknown months
+print(pd.crosstab(oni_df["phase"], oni_df["enso_state"], dropna=False))
+
+
+# --- 7. Features (past data only) -------------------------------------------------
+# A model must only see what would have been known at prediction time; otherwise it scores
+# well in testing and fails in real use ("leakage").
+#  - Each month's ONI averages the month before, the month itself AND the month after,
+#    so it isn't final until the next month ends. Features therefore start at last month.
+#  - The event labels above need future months to decide (does the spell last 5 months?),
+#    so they are only ever used as targets, never as features.
+prev = oni.shift(1)                                         # last month's ONI
+
+oni_feats = pd.DataFrame(index=oni_df.index)
+for lag in (1, 2, 3, 6, 12):
+    oni_feats[f"oni_lag{lag}"] = oni.shift(lag)
+oni_feats["oni_trend_3m"] = prev - oni.shift(4)                      # warming or cooling
+oni_feats["oni_mean_12m"] = prev.rolling(12, min_periods=6).mean()
+oni_feats["warm_streak_months"] = streak_length(prev >= EL_NINO_THRESHOLD)
+oni_feats["cold_streak_months"] = streak_length(prev <= LA_NINA_THRESHOLD)
+
+
+# --- 8. Targets: what happens 1, 3 and 6 months later --------------------------------
+# Example, row for March 2023 (features = ONI up to Feb 2023):
+#   el_nino_in_1m = 0             April 2023 was not El Niño yet
+#   el_nino_in_3m = 1             June 2023 was the start of the 2023-24 El Niño
+#   el_nino_onset_within_3m = 1   an El Niño started during April-June
+# The last few rows have no future data yet, so their targets are NaN.
+LEADS = (1, 3, 6)
+
+starts = ((oni_df["el_nino"] == 1) & (oni_df["el_nino"].shift(fill_value=0) == 0)).astype(float)
+
+oni_targets = pd.DataFrame(index=oni_df.index)
+for h in LEADS:
+    oni_targets[f"el_nino_in_{h}m"]    = oni_df["el_nino"].shift(-h)
+    oni_targets[f"la_nina_in_{h}m"]    = oni_df["la_nina"].shift(-h)
+    oni_targets[f"enso_state_in_{h}m"] = oni_df["enso_state"].shift(-h)
+    oni_targets[f"oni_in_{h}m"]        = oni.shift(-h)      # predicting the value also gives strength
+    # Early warning: does a new El Niño start in any of the next h months?
+    next_h_months = pd.concat([starts.shift(-k) for k in range(1, h + 1)], axis=1)
+    oni_targets[f"el_nino_onset_within_{h}m"] = next_h_months.max(axis=1, skipna=False)
+    oni_targets[f"target_provisional_{h}m"] = oni_df["provisional"].shift(-h).astype("boolean")
+
+
+# --- 9. Assemble the training table -------------------------------------------------
+# Only ~1 in 4 months is El Niño, so a model could look accurate by always answering "no".
+# Class weights make El Niño months count more, so both outcomes matter equally overall.
+# Provisional months count half because their values may still change; NaN targets count 0.
+PROVISIONAL_WEIGHT = 0.5
 
 def sample_weights(y, provisional=None, provisional_weight=PROVISIONAL_WEIGHT):
-    """Balance the classes so the rarer El Niño months count as much as the rest; down-weight provisional labels."""
     y = pd.Series(y).astype(float)
     w = pd.Series(0.0, index=y.index)
-    ok = y.notna()
-    pos = (y[ok] == 1).mean()
-    if 0 < pos < 1:
-        w[ok] = np.where(y[ok] == 1, 0.5 / pos, 0.5 / (1 - pos))
+    known = y.notna()
+    share_el_nino = (y[known] == 1).mean()
+    if 0 < share_el_nino < 1:
+        w[known] = np.where(y[known] == 1, 0.5 / share_el_nino, 0.5 / (1 - share_el_nino))
     else:
-        w[ok] = 1.0
+        w[known] = 1.0
     if provisional is not None:
         w[pd.Series(provisional, index=y.index).fillna(False).astype(bool)] *= provisional_weight
     return w
 
-try:
-    oni_raw = load_oni()
-except NotImplementedError as e:
-    print(f"\nSkipping ONI events: {e}")
-else:
-    print(f"\n=== ONI data ===  {len(oni_raw)} months, {oni_raw.time.min():%Y-%m} → {oni_raw.time.max():%Y-%m}")
-    print(oni_raw.head(12))
-    oni_df, oni_feats, oni_targets, el_nino_events = build_oni_features(oni_raw)
-    print("\n=== El Niño events (ONI >= 0.5 for >= 5 months) ===")
-    print(el_nino_events)
-    # Check: our labels vs the file's own `phase` column
-    print(pd.crosstab(oni_df["phase"], oni_df["enso_state"], dropna=False))
-
-    # Model table: time features + ONI inputs, joined on month; targets kept separate
-    month_start = pd.to_datetime(time_df["time"]).dt.to_period("M").dt.to_timestamp()
-    model_df = time_df.set_index(month_start).join(oni_feats, how="left")
-    y = oni_targets.reindex(model_df.index)["el_nino_in_3m"]
-    w = sample_weights(y, oni_targets.reindex(model_df.index)["target_provisional_3m"])
-    print(model_df.tail(3))
+# One row per month: time features + ONI features. Target (y) and weights (w) kept separate.
+month_start = pd.to_datetime(time_df["time"]).dt.to_period("M").dt.to_timestamp()
+model_df = time_df.set_index(month_start).join(oni_feats, how="left")
+y = oni_targets.reindex(model_df.index)["el_nino_in_3m"]
+w = sample_weights(y, oni_targets.reindex(model_df.index)["target_provisional_3m"])
+print(model_df.tail(3))
