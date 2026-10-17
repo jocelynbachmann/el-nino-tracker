@@ -26,7 +26,10 @@ model notebook          ──►       processed/                   streams fro
 | Path | What |
 |---|---|
 | `pipeline/preprocess.ipynb` | Stitches ARMOR3D 1993–2024 + 2025–present, crops to 40–62°N 150–120°W, computes climatology, ENSO labels, wind, `meta.json` |
+| `model/` | MLD model notebooks (`model1.ipynb`, `model2.ipynb`) |
+| `cds_api.py` | Downloads C3S seasonal forecasts (needs a CDS API key in `~/.cdsapirc`) |
 | `server/` | Flask API (see [server/README.md](server/README.md) for endpoints) |
+| `requirements.txt` | Python packages for the notebooks, scripts and server |
 | `client/` | React frontend (coming) |
 
 ## Processed data (in `s3://ocean-hackathon-2026/teams/team-elnino/processed/`)
@@ -43,18 +46,34 @@ model notebook          ──►       processed/                   streams fro
 
 ## Running locally
 
-1. **Save the team AWS key on your laptop** (once): `python server/setup_aws.py`.
+Use **Python 3.11 or newer**. On **Windows, stick to 3.11–3.13**: `numcodecs` (needed by
+zarr) has no prebuilt wheels for newer versions, so pip has to compile it. That works on macOS
+and Linux with a C compiler (Xcode command-line tools on Mac) but usually fails on Windows.
+
+1. **Create one virtual environment at the repo root** and install everything:
+   ```bash
+   # macOS / Linux
+   python3 -m venv .venv && source .venv/bin/activate
+   # Windows (PowerShell)
+   py -3.11 -m venv .venv; .venv\Scripts\Activate.ps1
+
+   pip install -r requirements.txt
+   ```
+   This covers the notebooks, `cds_api.py` and the server. (The server alone only needs
+   `server/requirements.txt`.)
+2. **Save the team AWS key on your laptop** (once): `python server/setup_aws.py`.
    It asks for the same Access key ID and Secret access key as the hub's Step 1 and stores
-   them in `~/.aws/credentials`, never in the repo.
-2. **Start the server.**
+   them in `~/.aws/credentials` under the profile `hack-team`, never in the repo. The model
+   notebooks and the server both read data through that profile.
+3. **Run the notebooks.** Open `model/model2.ipynb` (or any notebook) in Jupyter or VS Code and
+   pick the `.venv` kernel at the repo root.
+4. **Start the server.**
    ```bash
    cd server
-   python3 -m venv .venv && source .venv/bin/activate
-   pip install -r requirements.txt
    flask --app app run --debug --port 5001
    ```
    Check http://localhost:5001/metadata
-3. **Start the client.** (coming)
+5. **Start the client.** (coming)
 
 ## Model
 

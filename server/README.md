@@ -7,6 +7,7 @@ It does no drawing: the client turns these numbers into maps and charts.
 
 ```bash
 cd server
+# Python 3.11+ (3.11–3.13 on Windows); see the main README for Windows and the full-repo venv
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python setup_aws.py            # once per machine: paste the team's AWS key (same as hub Step 1)
