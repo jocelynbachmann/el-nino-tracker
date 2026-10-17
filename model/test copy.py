@@ -120,7 +120,9 @@ print(f"\nLand/NaN fraction in first ocean timestep: {frac_nan:.1%}")
 
 # --- 4. Time features ---------------------------------------------------------------
 # Time is given to the model in two ways:
-#   t_years  continuous clock (years since start), so it can pick up long-term trends
+#   t_years  continuous clock (years since start), so it can pick up long-term trends.
+#            Tree models can't extrapolate it: later months get the trend as of the
+#            last training year.
 #   month    1-12 as a category, so it can learn seasons without treating 12 as "far" from 1
 T0 = pd.to_datetime(ocean.time.values).min()
 
@@ -227,7 +229,8 @@ print(pd.crosstab(oni_df["phase"], oni_df["enso_state"], dropna=False))
 # A model must only see what would have been known at prediction time; otherwise it scores
 # well in testing and fails in real use ("leakage").
 #  - Each month's ONI averages the month before, the month itself AND the month after,
-#    so it isn't final until the next month ends. Features therefore start at last month.
+#    so it isn't final until the next month ends. Features therefore start at last month,
+#    whose ONI includes this month: a row's features are known at the END of its month.
 #  - The event labels above need future months to decide (does the spell last 5 months?),
 #    so they are only ever used as targets, never as features.
 prev = oni.shift(1)                                         # last month's ONI
@@ -242,14 +245,18 @@ oni_feats["cold_streak_months"] = streak_length(prev <= LA_NINA_THRESHOLD)
 
 
 # --- 8. Targets: what happens 1, 3 and 6 months later --------------------------------
-# Example, row for March 2023 (features = ONI up to Feb 2023):
+# Example, row for March 2023 (features = ONI up to Feb 2023, which needs data to end of March):
 #   el_nino_in_1m = 0             April 2023 was not El Niño yet
-#   el_nino_in_3m = 1             June 2023 was the start of the 2023-24 El Niño
-#   el_nino_onset_within_3m = 1   an El Niño started during April-June
+#   el_nino_in_3m = 1             June 2023 was El Niño
+#   el_nino_onset_within_3m = 1   an El Niño started during April-June (May 2023, if the
+#                                 file labels each 3-month average by its middle month)
+# Leads count from the end of the row's month. A month's ONI already includes the month
+# before it, so the 1-month target is partly known when the prediction is made.
 # The last few rows have no future data yet, so their targets are NaN.
 LEADS = (1, 3, 6)
 
 starts = ((oni_df["el_nino"] == 1) & (oni_df["el_nino"].shift(fill_value=0) == 0)).astype(float)
+starts[oni_df["el_nino"].isna()] = np.nan      # unknown label = unknown whether one started
 
 oni_targets = pd.DataFrame(index=oni_df.index)
 for h in LEADS:
