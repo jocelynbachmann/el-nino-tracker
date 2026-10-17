@@ -10,11 +10,10 @@ import "maplibre-gl/dist/maplibre-gl.css";
 // Maplibre's web worker
 setWorkerUrl(workerUrl);
 
-// Roughly Haida Gwaii / Alaska border down to Victoria / the US border
 // [[west, south], [east, north]]
 const COAST_BOUNDS = [
-    [-136.5, 48.0],
-    [-121.5, 56.5],
+    [-134, 46],
+    [-120, 53],
 ];
 
 /**
