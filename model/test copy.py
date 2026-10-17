@@ -1,5 +1,5 @@
 # STEP 2 - CONNECT TO THE DATA  (run every time you open the notebook)
-import boto3, s3fs
+import boto3, s3fs, json
 import xarray as xr
 
 DATA_FOLDER = "elnino"       # your team's data folder - no need to change this
@@ -137,17 +137,22 @@ LEADS = (1, 3, 6)                # months ahead the model forecasts
 PROVISIONAL_WEIGHT = 0.5
 
 def load_oni(path=ONI_PATH):
-    """STUB - implement later.
-
-    Read the file with columns month, oni, phase, provisional and return a DataFrame with:
-      time        Timestamp, first day of the month (if `month` is a season code like
-                  "DJF", use its centre month: DJF -> Jan, JFM -> Feb, ...)
+    """Read the ONI file from S3 and return one row per month, sorted by time:
+      time        Timestamp, first day of the month
       oni         float
-      phase       str ("El Nino" / "La Nina" / "Neutral", as given in the file)
+      phase       str ("el_nino" / "la_nina" / "neutral", as given in the file)
       provisional bool
-    sorted by time, one row per month.
+
+    The file is a JSON list of {"month": "1993-01", "oni": 0.13, "phase": "neutral",
+    "provisional": false}.
     """
-    raise NotImplementedError("load_oni: ONI file import not implemented yet")
+    with fs.open(path) as f:
+        oni = pd.DataFrame(json.load(f))
+    oni["time"] = pd.to_datetime(oni["month"], format="%Y-%m")
+    oni["oni"] = oni["oni"].astype(float)
+    oni["provisional"] = oni["provisional"].astype(bool)
+    return (oni[["time", "oni", "phase", "provisional"]]
+            .drop_duplicates("time", keep="last").sort_values("time").reset_index(drop=True))
 
 def _event_runs(mask, min_len):
     """Number each run of True values lasting >= min_len months (1, 2, ...); 0 = not in an event."""
@@ -175,9 +180,15 @@ def build_oni_features(oni_df, leads=LEADS):
     # Event labels (look ahead, so targets only)
     df["el_nino_event_id"] = _event_runs(oni >= EL_NINO_THRESHOLD, MIN_EVENT_MONTHS)
     df["la_nina_event_id"] = _event_runs(oni <= LA_NINA_THRESHOLD, MIN_EVENT_MONTHS)
-    df["el_nino"] = (df["el_nino_event_id"] > 0).astype(int)
-    df["la_nina"] = (df["la_nina_event_id"] > 0).astype(int)
+    df["el_nino"] = (df["el_nino_event_id"] > 0).astype(float)
+    df["la_nina"] = (df["la_nina_event_id"] > 0).astype(float)
+    # A run still going at the end of the record may yet reach 5 months: unknown, not "no event"
+    for col, mask in (("el_nino", oni >= EL_NINO_THRESHOLD), ("la_nina", oni <= LA_NINA_THRESHOLD)):
+        tail = int(_months_in_streak(mask).iloc[-1])
+        if 0 < tail < MIN_EVENT_MONTHS:
+            df.loc[df.index[-tail:], col] = np.nan
     df["enso_state"] = np.select([df["el_nino"] == 1, df["la_nina"] == 1], [1, -1], 0)  # +1 / 0 / -1
+    df.loc[df["el_nino"].isna() | df["la_nina"].isna(), "enso_state"] = np.nan
     onset = (df["el_nino"] == 1) & (df["el_nino"].shift(fill_value=0) == 0)
 
     # Causal inputs: only ONI from month t-1 and earlier
@@ -231,6 +242,8 @@ try:
 except NotImplementedError as e:
     print(f"\nSkipping ONI events: {e}")
 else:
+    print(f"\n=== ONI data ===  {len(oni_raw)} months, {oni_raw.time.min():%Y-%m} → {oni_raw.time.max():%Y-%m}")
+    print(oni_raw.head(12))
     oni_df, oni_feats, oni_targets, el_nino_events = build_oni_features(oni_raw)
     print("\n=== El Niño events (ONI >= 0.5 for >= 5 months) ===")
     print(el_nino_events)
