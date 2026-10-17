@@ -1,0 +1,15 @@
+seas5_monthly_grid.csv
+ECMWF SEAS5 forecast from 2026-10-01, mean of 51 ensemble runs.
+Area 46.5-51.5N, 133.5-120.5W, 1 deg grid. Months 2026-10 to 2027-03.
+
+month                 YYYY-MM, monthly mean
+lat, lon              cell centre (deg; lon negative = west)
+is_ocean              False = land, ocean columns empty
+sea_surface_height_m  sea height above geoid (m)
+surface_temp_c        sea surface temp (C)
+wind_speed_ms         10 m wind speed (m/s)
+north_wind_ms         10 m wind, + = toward north (m/s)
+east_wind_ms          10 m wind, + = toward east (m/s)
+salinity_psu          surface salinity (PSU)
+*_spread              std dev across the 51 runs (uncertainty)
+*_source              model = real data; proxy/approx = estimated
