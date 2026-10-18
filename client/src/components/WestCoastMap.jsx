@@ -3,7 +3,7 @@
  * @description Map component, focused on west coast of canada, static.
  */
 import { useState, useEffect, useRef } from "react";
-import { Map, setWorkerUrl } from "maplibre-gl";
+import { Map as MapLibreMap, setWorkerUrl } from "maplibre-gl";
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { fetchCurrentWeather } from "@/lib/weather";
@@ -17,13 +17,16 @@ const RADAR_URL =
 setWorkerUrl(workerUrl);
 
 // [[west, south], [east, north]]
+// [-134, 46],
+// [-120, 53],
 const COAST_BOUNDS = [
-    [-134, 46],
-    [-120, 53],
+    [-135, 47],
+    [-121, 54],
 ];
 
 const WEATHER_LAYER_IDS = ["weather-circles", "weather-temps", "weather-names"];
 const REFRESH_MS = 15 * 60 * 1000;
+const OCEAN_PREFIX = "ocean-"; // each data layer starts with ocean-
 
 function addWeatherLayers(map) {
     map.addSource("weather", {
@@ -105,7 +108,10 @@ function addWeatherLayers(map) {
 
 // place ocean raster under basemap labels
 function firstSymbolLayerId(map) {
-    return map.getStyle().layers.find((l) => l.type === "symbol")?.id;
+    return map
+        .getStyle()
+        .layers.find((l) => l.type === "symbol" && !l.id.startsWith("weather"))
+        ?.id;
 }
 
 /**
@@ -116,109 +122,130 @@ function firstSymbolLayerId(map) {
 export default function WestCoastMap({
     className = "h-svh w-full",
     bounds = COAST_BOUNDS,
-    overlay = null,
-    overlayOpacity = 0.85,
-    layers = {},
+    overlays = [],
+    showWeather = false,
 }) {
     const containerRef = useRef(null);
     const mapRef = useRef(null);
     const boundsRef = useRef(bounds);
+    const urlsRef = useRef(new Map()); // layer id
     const [loaded, setLoaded] = useState(false);
-
+    // Create the map once
     useEffect(() => {
-        const map = new Map({
+        const map = new MapLibreMap({
             container: containerRef.current,
             style: "https://tiles.openfreemap.org/styles/positron",
-            bounds: COAST_BOUNDS,
+            bounds: boundsRef.current,
             fitBoundsOptions: { padding: 20 },
-            interactive: false, // static map
+            interactive: false,
             attributionControl: { compact: true },
         });
-
-        // const addRadar = () => {
-        //     if (map.getSource("radar")) return; // protect against double-adding
-        //     map.addSource("radar", {
-        //         type: "raster",
-        //         tiles: [RADAR_URL],
-        //         tileSize: 256,
-        //         attribution: "Environment and Climate Change Canada",
-        //     });
-        //     map.addLayer({
-        //         id: "radar-layer",
-        //         type: "raster",
-        //         source: "radar",
-        //         paint: { "raster-opacity": 0.7 },
-        //     });
-        // };
         mapRef.current = map;
+        const urls = urlsRef.current;
+
+        const fit = (why) => {
+            const el = containerRef.current;
+            console.log(
+                "fit:",
+                why,
+                el?.clientWidth,
+                el?.clientHeight,
+                boundsRef.current,
+            );
+            map.fitBounds(boundsRef.current, { padding: 20, animate: false });
+        };
+
+        // This is what already worked when resizing the window
+        map.on("resize", () => fit("resize"));
 
         map.on("load", () => {
             addWeatherLayers(map);
             setLoaded(true);
         });
 
-        // Resizing to map always fits
-        const onResize = () =>
-            map.fitBounds(COAST_BOUNDS, { padding: 20, animate: false });
-        map.on("resize", onResize);
+        // Once everything has loaded and drawn for the first time, frame it again.
+        // This catches anything that moved the camera during loading.
+        map.once("idle", () => {
+            map.resize();
+            fit("first idle");
+        });
 
         return () => {
-            map.off("resize", onResize);
             map.remove();
-        }; // cleanup
+            mapRef.current = null;
+            urls.clear();
+            setLoaded(false);
+        };
     }, []);
 
-    // refreand when bounds change (will be affected by metadata)
+    // Re-frame when the data bounds arrive from /metadata
     const boundsKey = JSON.stringify(bounds);
     useEffect(() => {
         boundsRef.current = bounds;
-        mapRef.current?.fitBounds(bounds, { padding: 20, animate: false });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [boundsKey]);
+        const map = mapRef.current;
+        if (map) {
+            console.log("fit: bounds changed", bounds);
+            map.fitBounds(bounds, { padding: 20, animate: false });
+        }
+    }, [boundsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Ocean data overlay
     useEffect(() => {
         const map = mapRef.current;
-        if (!loaded || !map || !overlay) return;
-
-        const source = map.getSource("ocean");
-        if (source) {
-            source.updateImage({
-                url: overlay.url,
-                coordinates: overlay.coordinates,
-            });
-        } else {
-            map.addSource("ocean", {
-                type: "image",
-                url: overlay.url,
-                coordinates: overlay.coordinates,
-            });
-            map.addLayer(
-                {
-                    id: "ocean",
-                    type: "raster",
-                    source: "ocean",
-                    paint: {
-                        "raster-opacity": overlayOpacity,
-                        "raster-fade-duration": 0,
-                        "raster-resampling": "linear",
-                    },
-                },
-                firstSymbolLayerId(map),
-            );
+        if (!loaded || !map) return;
+        const urls = urlsRef.current;
+        const wanted = new Set(overlays.map((o) => OCEAN_PREFIX + o.id));
+        for (const layer of map.getStyle().layers) {
+            if (layer.id.startsWith(OCEAN_PREFIX) && !wanted.has(layer.id)) {
+                map.removeLayer(layer.id);
+                map.removeSource(layer.id);
+                urls.delete(layer.id);
+            }
         }
+
+        const beforeId = firstSymbolLayerId(map);
+
+        for (const o of overlays) {
+            const id = OCEAN_PREFIX + o.id;
+
+            if (!map.getSource(id)) {
+                map.addSource(id, {
+                    type: "image",
+                    url: o.url,
+                    coordinates: o.coordinates,
+                });
+                map.addLayer(
+                    {
+                        id,
+                        type: "raster",
+                        source: id,
+                        paint: {
+                            "raster-opacity": o.opacity,
+                            "raster-fade-duration": 0,
+                            "raster-resampling": "linear",
+                        },
+                    },
+                    beforeId,
+                );
+                urls.set(id, o.url);
+            } else if (urls.get(id) !== o.url) {
+                map.getSource(id).updateImage({
+                    url: o.url,
+                    coordinates: o.coordinates,
+                });
+                urls.set(id, o.url);
+            }
+
+            map.setPaintProperty(id, "raster-opacity", o.opacity);
+            // Moving each one just under the labels, in order, leaves the last one on top
+            map.moveLayer(id, beforeId);
+        }
+
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [loaded, overlay]);
+    }, [loaded, overlays]);
 
     useEffect(() => {
-        const map = mapRef.current;
-        if (!loaded || !map?.getLayer("ocean")) return;
-        map.setPaintProperty("ocean", "raster-opacity", overlayOpacity);
-    }, [loaded, overlay, overlayOpacity]);
-
-    // Weather: fetch once the map is ready, then refresh (only while it's shown)
-    useEffect(() => {
-        if (!loaded || !layers.weather) return;
+        if (!loaded || !showWeather) return;
         let cancelled = false;
 
         const update = async () => {
@@ -237,24 +264,21 @@ export default function WestCoastMap({
             cancelled = true;
             clearInterval(id);
         };
-    }, [loaded, layers.weather]);
+    }, [loaded, showWeather]);
 
-    // Layer toggles
     useEffect(() => {
         const map = mapRef.current;
         if (!loaded || !map) return;
-        const vis = (on) => (on ? "visible" : "none");
         for (const id of WEATHER_LAYER_IDS) {
-            map.setLayoutProperty(id, "visibility", vis(layers.weather));
+            if (map.getLayer(id)) {
+                map.setLayoutProperty(
+                    id,
+                    "visibility",
+                    showWeather ? "visible" : "none",
+                );
+            }
         }
-        if (map.getLayer("ocean")) {
-            map.setLayoutProperty(
-                "ocean",
-                "visibility",
-                vis(layers.ocean !== false),
-            );
-        }
-    }, [loaded, overlay, layers.weather, layers.ocean]);
+    }, [loaded, showWeather]);
 
     return <div ref={containerRef} className={className} />;
 }

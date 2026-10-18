@@ -1,3 +1,7 @@
+/*
+ * @file @/hooks/useOcean.js
+ * @description hooks for getting
+ */
 import { useEffect, useMemo, useState } from "react";
 import {
     getElNino,
@@ -9,7 +13,7 @@ import {
     toMonths,
     toRange,
 } from "@/lib/oceanApi";
-import { buildLut, getColormap } from "@/lib/colourmap";
+import { buildLut, getColourmap } from "@/lib/colourmap";
 import { gridToImage } from "@/lib/gridImage";
 
 // Metadata, ENSO labels and forecast, loaded once
@@ -59,69 +63,94 @@ export function useOceanMeta() {
 
     return state;
 }
+const imageCache = new Map();
 
-// One month of one variable, rendered to an image for the map
-export function useOceanOverlay({
-    variable,
-    month,
-    anomaly,
-    area,
-    enabled = true,
-}) {
-    const [state, setState] = useState({
-        overlay: null,
-        loading: false,
-        error: null,
+function loadOverlay(variable, month, anomaly) {
+    const key = `${variable.id}|${month}|${anomaly}`;
+    if (imageCache.has(key)) return imageCache.get(key);
+
+    const p = getMap(variable.id, month, { anomaly }).then((grid) => {
+        const range =
+              toRange(grid.color_range) ??
+              toRange(anomaly ? variable.anomaly_range : variable.range) ??
+              null; // null -> computed from the data
+        const lut = buildLut(getColourmap(variable.colormap, { anomaly }));
+        const img = gridToImage(grid, lut, range);
+        return {
+            overlay: { url: img.url, coordinates: img.coordinates },
+            range: img.range,
+            source: grid.source ?? "observed",
+        };
     });
 
-    useEffect(() => {
-        if (!enabled || !variable?.id || !month) return;
-        let cancelled = false;
-        setState((s) => ({ ...s, loading: true, error: null }));
+    imageCache.set(key, p);
+    p.catch(() => imageCache.delete(key)); // don't cache failures
+    return p;
+}
 
-        getMap(variable.id, month, { anomaly, area })
-            .then((grid) => {
-                if (cancelled) return;
-                const range =
-                    toRange(grid.color_range) ??
-                    toRange(
-                        anomaly ? variable.anomaly_range : variable.range,
-                    ) ??
-                    null; // null -> computed from the data
-                const lut = buildLut(
-                    getColormap(variable.colormap, { anomaly }),
-                );
-                const img = gridToImage(grid, lut, range);
-                setState({
-                    loading: false,
-                    error: null,
-                    overlay: { url: img.url, coordinates: img.coordinates },
-                    range: img.range,
-                    source: grid.source ?? "observed",
+// Several variables for one month. Returns { [variableId]: { overlay, range, source, loading, error } }
+export function useOceanOverlays({ variables, month, anomaly }) {
+    const [results, setResults] = useState({});
+    const ids = variables.map((v) => v.id).join(",");
+
+    useEffect(() => {
+        if (!month || !variables.length) {
+            setResults({});
+            return;
+        }
+        let cancelled = false;
+
+        // Keep each layer's previous image while the new month loads (no flicker),
+        // and drop layers that were unchecked
+        setResults((prev) => {
+            const next = {};
+            for (const v of variables)
+                next[v.id] = { ...prev[v.id], loading: true, error: null };
+            return next;
+        });
+
+        for (const v of variables) {
+            loadOverlay(v, month, anomaly)
+                .then((r) => {
+                    if (!cancelled) {
+                        setResults((prev) => ({
+                            ...prev,
+                            [v.id]: { ...r, loading: false, error: null },
+                        }));
+                    }
+                })
+                .catch((err) => {
+                    // e.g. a forecast month for a variable that only has observations
+                    if (!cancelled) {
+                        setResults((prev) => ({
+                            ...prev,
+                            [v.id]: {
+                                overlay: null,
+                                loading: false,
+                                error: err,
+                            },
+                        }));
+                    }
                 });
-            })
-            .catch((err) => {
-                if (!cancelled)
-                    setState((s) => ({ ...s, loading: false, error: err }));
-            });
+        }
 
         return () => {
             cancelled = true; // ignore late responses while scrubbing the slider
         };
-    }, [variable, month, anomaly, area, enabled]);
+    }, [ids, month, anomaly]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    return state;
+    return results;
 }
 
-// The month list for a variable: observed months, plus forecast months if it has them
-export function useMonths(meta, variable) {
+// Observed months, plus forecast months if any selected variable has them
+export function useMonths(meta, variables) {
     return useMemo(() => {
         if (!meta?.observedMonths) return [];
-        if (!variable?.hasForecast) return meta.observedMonths;
+        if (!variables.some((v) => v.hasForecast)) return meta.observedMonths;
         const seen = new Set(meta.observedMonths);
         return [
             ...meta.observedMonths,
             ...meta.forecastMonths.filter((m) => !seen.has(m)),
         ];
-    }, [meta, variable]);
+    }, [meta, variables]);
 }

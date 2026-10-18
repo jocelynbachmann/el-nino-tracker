@@ -1,6 +1,7 @@
-// Colour maps for the ocean grids, no dependencies.
-// Each scheme is a list of evenly spaced hex stops, interpolated linearly.
-// Names follow matplotlib; cmocean names map to the closest scheme here.
+/**
+ * @file colourmap.js
+ * @description colour maps for the ocean. Naming follows cmocean naming convention
+ * */
 
 const SCHEMES = {
     viridis: [
@@ -215,7 +216,7 @@ function resolve(name) {
 }
 
 // Returns t (0..1) -> [r, g, b]. Anomalies always use blue (below normal) -> red (above).
-export function getColormap(name, { anomaly = false } = {}) {
+export function getColourmap(name, { anomaly = false } = {}) {
     if (anomaly) return resolve("rdbu_r");
     return resolve(name) ?? resolve("viridis");
 }

@@ -1,8 +1,10 @@
-// Client for the Flask ocean server.
-// "/ocean" is proxied to http://localhost:5001 by Vite (see vite.config.js),
-// which avoids CORS in development.
+/**
+ * @file '@/lib/oceanApi.js'
+ * @description fetches data from Flask, caches it
+ */
+// "/ocean" is proxied to http://localhost:5001 in vite.config.js
 const BASE = import.meta.env?.VITE_OCEAN_API ?? "/ocean";
-const cache = new Map(); // url -> Promise, so scrubbing back over months is instant
+const cache = new Map(); // caching so going back to a month is instant
 
 function get(path, { cached = false } = {}) {
     const url = BASE + path;
@@ -16,6 +18,7 @@ function get(path, { cached = false } = {}) {
                 reason = body.error ?? body.message ?? reason;
             } catch {
                 /* not JSON */
+                throw new Error("Error in response body.");
             }
             throw new Error(`${res.status} ${reason} (${path})`);
         }
@@ -51,12 +54,6 @@ export function getLocationSeries(lat, lon, variable) {
 
 export const getRegionSeries = (variable) =>
     get(`/timeseries/region/${variable}`, { cached: true });
-
-// ---------------------------------------------------------------------------
-// Normalizers. The README describes what /metadata contains but not the exact
-// JSON shapes, so these accept the likely variants. If something looks off,
-// log the /metadata response and adjust here; nothing else needs to change.
-// ---------------------------------------------------------------------------
 
 // variables: object keyed by id, or an array of {id|name|key, ...}
 export function normalizeVariables(meta) {
@@ -102,7 +99,6 @@ function expandRange(start, end) {
     return out;
 }
 
-// ["1993-01", ...], [{month: ...}], or {start, end}
 export function toMonths(value) {
     if (!value) return [];
     if (Array.isArray(value)) {
