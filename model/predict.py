@@ -181,3 +181,5 @@ if __name__ == "__main__":
               f"{np.average(res['mld_p90'], weights=w):.1f} m)")
     else:
         print(predict_all_months().round(1).to_string(index=False))
+
+
