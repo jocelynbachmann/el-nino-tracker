@@ -27,11 +27,12 @@ const COAST_BOUNDS = [
 const WEATHER_LAYER_IDS = ["weather-circles", "weather-temps", "weather-names"];
 const REFRESH_MS = 15 * 60 * 1000;
 const OCEAN_PREFIX = "ocean-"; // each data layer starts with ocean-
+const HERRING_LAYER_IDS = ["herring-spawn", "herring-count"];
+const EMPTY = { type: "FeatureCollection", features: [] };
 
 function addWeatherLayers(map) {
     map.addSource("weather", {
         type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
         attribution:
             '<a href="https://open-meteo.com/">Weather data by Open-Meteo.com</a>',
     });
@@ -41,7 +42,7 @@ function addWeatherLayers(map) {
         type: "circle",
         source: "weather",
         paint: {
-            "circle-radius": 15,
+            "circle-radius": 30,
             "circle-color": [
                 "interpolate",
                 ["linear"],
@@ -109,7 +110,9 @@ function addWeatherLayers(map) {
 function addHerringLayer(map) {
     map.addSource("herring", {
         type: "geojson",
-        data: "/herring-spawn.geojson",
+        data: EMPTY, // filled per year by an effect
+        cluster: true,
+        clusterRadius: 30, // px: points closer than this merge into one circle
         attribution:
             "Herring spawn: Fisheries and Oceans Canada (Open Government Licence – Canada)",
     });
@@ -119,14 +122,41 @@ function addHerringLayer(map) {
         type: "circle",
         source: "herring",
         layout: { visibility: "none" },
-        filter: ["==", ["get", "year"], -1], // nothing until a year is set
         paint: {
-            "circle-radius": 3,
+            // single spawns have no point_count, so treat them as 1
+            "circle-radius": [
+                "interpolate",
+                ["linear"],
+                ["coalesce", ["get", "point_count"], 1],
+                1,
+                4,
+                10,
+                10,
+                50,
+                18,
+                150,
+                28,
+            ],
             "circle-color": "#7c3aed",
+            "circle-opacity": 0.6,
             "circle-stroke-color": "#ffffff",
-            "circle-stroke-width": 0.5,
-            "circle-opacity": 0.9,
+            "circle-stroke-width": 1,
         },
+    });
+
+    map.addLayer({
+        id: "herring-count",
+        type: "symbol",
+        source: "herring",
+        filter: ["has", "point_count"], // only label clusters
+        layout: {
+            visibility: "none",
+            "text-field": ["get", "point_count_abbreviated"],
+            "text-font": ["Noto Sans Bold"],
+            "text-size": 11,
+            "text-allow-overlap": true,
+        },
+        paint: { "text-color": "#ffffff" },
     });
 }
 
@@ -156,6 +186,14 @@ export default function WestCoastMap({
     const boundsRef = useRef(bounds);
     const urlsRef = useRef(new Map()); // layer id
     const [loaded, setLoaded] = useState(false);
+    const [herring, setHerring] = useState(null);
+
+    useEffect(() => {
+        fetch("/herring-spawn.geojson")
+                             .then((r) => r.json())
+                             .then(setHerring)
+                             .catch((err) => console.error("Herring data failed to load:", err));
+    }, []);
     // Create the map once
     useEffect(() => {
         const map = new MapLibreMap({
@@ -309,18 +347,27 @@ export default function WestCoastMap({
 
     useEffect(() => {
         const map = mapRef.current;
-        if (!loaded || !map?.getLayer("herring-spawn")) return;
-        map.setFilter("herring-spawn", [
-            "==",
-            ["get", "year"],
-            herringYear ?? -1,
-        ]);
-        map.setLayoutProperty(
-            "herring-spawn",
-            "visibility",
-            showHerring ? "visible" : "none",
-        );
-    }, [loaded, showHerring, herringYear]);
+        if (!loaded || !map?.getSource("herring")) return;
+
+        const features =
+              herring && showHerring
+                  ? herring.features.filter(
+                      (f) => f.properties.year === herringYear,
+                  )
+                : [];
+        map.getSource("herring").setData({
+            type: "FeatureCollection",
+            features,
+        });
+
+        for (const id of HERRING_LAYER_IDS) {
+            map.setLayoutProperty(
+                id,
+                "visibility",
+                showHerring ? "visible" : "none",
+            );
+        }
+    }, [loaded, herring, showHerring, herringYear]);
 
     return <div ref={containerRef} className={className} />;
 }
