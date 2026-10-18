@@ -24,9 +24,12 @@ import { useEvents } from "@/hooks/useEvents";
 import { useAnalysisMap } from "@/hooks/useAnalysisMap";
 import { eventMapTime, formatTime, VARIABLE_WORDS } from "@/lib/eventText";
 import { cssGradient, getColourmap } from "@/lib/colourmap";
-import { PHASE_LABEL } from "@/lib/oceanApi";
+import { getRegionSeries, PHASE_LABEL } from "@/lib/oceanApi";
 
 const DEFAULT_LAYERS = ["mixed-layer-depth"];
+// Events that open at the month our region's surface water was warmest (the demo event),
+// instead of the usual ONI peak + response lag
+const OPEN_AT_WARMEST = new Set(["el-nino-2014"]);
 const DEFAULT_OPACITY = 85;
 
 const sliderValue = (v) => (Array.isArray(v) ? v[0] : v); // Radix passes arrays, Base UI may not
@@ -324,18 +327,33 @@ export default function App() {
         history.events.find((e) => e.id === selectedEventId) ?? null;
     const clampMonth = (m) =>
         monthPos.has(m) ? m : m > months.at(-1) ? months.at(-1) : months[0];
-    const eventMonth = selectedEvent
-        ? clampMonth(eventMapTime(selectedEvent, daily ? "day" : "month"))
-        : null;
+    // Region-average surface temperature by month (with anomaly), for OPEN_AT_WARMEST events
+    const [regionTemp, setRegionTemp] = useState(null);
+    useEffect(() => {
+        getRegionSeries("temperature")
+            .then((r) => setRegionTemp(Array.isArray(r) ? r : (r?.series ?? r?.months ?? null)))
+            .catch(() => setRegionTemp(null)); // falls back to the usual date
+    }, []);
+    const eventTime = (ev) => {
+        let m = null;
+        if (OPEN_AT_WARMEST.has(ev.id) && regionTemp?.length) {
+            const inEvent = regionTemp.filter(
+                (r) => r.month >= ev.start && r.month <= ev.end && r.value != null,
+            );
+            if (inEvent.length)
+                m = inEvent.reduce((a, b) => (b.value > a.value ? b : a)).month; // warmest, not most unusual
+        }
+        if (!m) return clampMonth(eventMapTime(ev, daily ? "day" : "month"));
+        return clampMonth(daily ? `${m}-15` : m);
+    };
+    const eventMonth = selectedEvent ? eventTime(selectedEvent) : null;
     // jump: go to when the event hit hardest (from the list); a click on the timeline keeps the
     // date that was clicked instead
     const selectEvent = (id, { jump = true } = {}) => {
         setSelectedEventId(id);
         const ev = history.events.find((e) => e.id === id);
         if (ev && jump) {
-            setPickedMonth(
-                clampMonth(eventMapTime(ev, daily ? "day" : "month")),
-            );
+            setPickedMonth(eventTime(ev));
             // "Show anomaly" stays as the user set it (it used to switch on with every event opened)
         }
     };
