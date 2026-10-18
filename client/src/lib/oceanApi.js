@@ -36,13 +36,15 @@ export const getHealth = () => get("/health");
 export const getMetadata = () => get("/metadata", { cached: true });
 export const getElNino = () => get("/el-nino", { cached: true });
 export const getForecast = () => get("/forecast"); // re-read by the server every call
+export const getEvents = () => get("/events", { cached: true }); // El Niño history analysis
 
-export function getMap(variable, month, { anomaly = false, area } = {}) {
+// when: "YYYY-MM-DD" (daily data) or "YYYY-MM" (monthly data / forecast)
+export function getMap(variable, when, { anomaly = false, area } = {}) {
     const params = new URLSearchParams();
     if (anomaly) params.set("anomaly", "true");
     if (area) params.set("area", area);
     const qs = params.toString();
-    return get(`/maps/${variable}/${month}${qs ? `?${qs}` : ""}`, {
+    return get(`/maps/${variable}/${when}${qs ? `?${qs}` : ""}`, {
         cached: true,
     });
 }
@@ -95,6 +97,19 @@ function expandRange(start, end) {
         m === 12 ? (y++, (m = 1)) : m++
     ) {
         out.push(ym(y, m));
+    }
+    return out;
+}
+
+// {start: "2002-01-01", end: "2026-10-11"} -> every day in between, as "YYYY-MM-DD"
+export function toDays(value) {
+    if (!value?.start || !value?.end) return [];
+    const out = [];
+    const d = new Date(`${value.start}T00:00:00Z`);
+    const end = new Date(`${value.end}T00:00:00Z`);
+    while (d <= end) {
+        out.push(d.toISOString().slice(0, 10));
+        d.setUTCDate(d.getUTCDate() + 1);
     }
     return out;
 }
