@@ -7,7 +7,7 @@ import WestCoastMap from "@/components/WestCoastMap";
 import EventTimeline from "@/components/EventTimeline";
 import EventCard from "@/components/EventCard";
 import MinimizeButton from "@/components/MinimizeButton";
-import { OceanPanelHelp } from "@/components/HelpText";
+import { OceanPanelHelp, VariableInfo } from "@/components/HelpText";
 import EventList from "@/components/EventList";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -108,9 +108,10 @@ function LayerRow({
         <div
             className={`rounded-md px-2 py-1.5 transition-colors ${checked ? "bg-accent" : "hover:bg-accent/60"}`}
         >
+            <div className="flex items-center gap-1.5">
             <Label
                 htmlFor={id}
-                className="flex cursor-pointer items-center gap-3 font-normal"
+                className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 font-normal"
             >
                 <Checkbox
                     id={id}
@@ -127,6 +128,9 @@ function LayerRow({
                     <span className="text-xs text-muted-foreground">…</span>
                 )}
             </Label>
+            {/* outside the label so clicking it doesn't toggle the layer */}
+            <VariableInfo id={variable.id} />
+            </div>
 
             {checked && (
                 <div className="mt-2 space-y-2 pl-7">
@@ -179,6 +183,16 @@ export default function App() {
     const [selectedEventId, setSelectedEventId] = useState(null);
     const [mapMode, setMapMode] = useState("day"); // for a selected event: day | onset | duration | typical
     const [panelOpen, setPanelOpen] = useState(true); // left "Ocean data" panel
+
+    // Height of the history strip, so the event card can stop above it (changes when minimized)
+    const [stripEl, setStripEl] = useState(null);
+    const [stripHeight, setStripHeight] = useState(180);
+    useEffect(() => {
+        if (!stripEl) return;
+        const ro = new ResizeObserver(() => setStripHeight(stripEl.getBoundingClientRect().height));
+        ro.observe(stripEl);
+        return () => ro.disconnect();
+    }, [stripEl]);
     const selectedVariables = useMemo(
         () =>
             selected
@@ -237,9 +251,7 @@ export default function App() {
     const analysis = useAnalysisMap({ mode: analysisMode, event: selectedEvent, variable: spellVariable });
 
     const overlays = useMemo(() => {
-        if (analysisMode !== "day") {
-            return analysis.overlay ? [{ id: "analysis", ...analysis.overlay, opacity: 0.9 }] : [];
-        }
+        if (analysisMode !== "day") return analysis.overlays ?? [];
         return selected
             .filter((id) => results[id]?.overlay)
             .map((id) => ({
@@ -247,7 +259,7 @@ export default function App() {
                 ...results[id].overlay,
                 opacity: opacityOf(id) / 100,
             }));
-    }, [selected, results, opacities, analysisMode, analysis.overlay]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [selected, results, opacities, analysisMode, analysis.overlays]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const toggleLayer = (id, on) =>
         setSelected((prev) => {
@@ -435,7 +447,8 @@ export default function App() {
 
             {selectedEvent && (
                 <EventCard
-                    className="absolute right-4 top-4 z-10 max-h-[calc(100svh-10rem)] w-80 overflow-y-auto"
+                    className="absolute right-4 top-4 z-10 w-80 overflow-y-auto"
+                    style={{ maxHeight: `calc(100svh - ${Math.round(stripHeight) + 48}px)` }}
                     event={selectedEvent}
                     peakTime={eventMonth}
                     mapTime={month}
@@ -452,8 +465,8 @@ export default function App() {
             )}
 
             {!meta.error && months.length > 0 && (
+                <div ref={setStripEl} className="absolute bottom-4 left-80 right-4 z-10">
                 <EventTimeline
-                    className="absolute bottom-4 left-80 right-4 z-10"
                     enso={ensoList}
                     events={history.events}
                     times={months}
@@ -464,6 +477,7 @@ export default function App() {
                     spellVariable={spellVariable}
                     regionalSpells={history.regionalSpells?.[spellVariable] ?? []}
                 />
+                </div>
             )}
         </div>
     );

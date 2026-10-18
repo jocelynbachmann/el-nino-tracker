@@ -35,14 +35,14 @@ function MapLegend({ mode, event, variable, analysis }) {
             left: "−6 mo",
             mid: "begins",
             right: "+18 mo",
-            note: `Months from when ${name} began. Blank: no clear change there.`,
+            note: `Months from when ${name} began.`,
         },
         duration: {
             title: `How long the change in ${w.label.toLowerCase()} lasted`,
             left: "0",
             mid: "",
             right: "30+ months",
-            note: "Blank: no clear change there.",
+            note: "",
         },
         typical: {
             title: `${w.label}: same change in past ${plural}?`,
@@ -74,6 +74,18 @@ function MapLegend({ mode, event, variable, analysis }) {
                     </div>
                 </>
             )}
+            {analysis.hasNoChange && (
+                <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <span
+                        className="inline-block h-3 w-4 rounded-sm border border-border"
+                        style={{
+                            background:
+                                "repeating-linear-gradient(45deg, rgb(120,113,108) 0 1.5px, transparent 1.5px 4.5px)",
+                        }}
+                    />
+                    Striped: checked, no clear change there
+                </p>
+            )}
             {analysis.empty ? (
                 <p className="text-xs text-muted-foreground">
                     {event.ongoing ? "Too early to tell for this event." : "No clear change anywhere for this variable."}
@@ -98,6 +110,7 @@ export default function EventCard({
     analysisVariable = "temperature",
     analysis,
     className = "",
+    style,
 }) {
     const [open, setOpen] = useState(true);
     if (!event) return null;
@@ -105,7 +118,7 @@ export default function EventCard({
     const showingPeak = mapTime === peakTime;
 
     return (
-        <div className={`rounded-lg bg-background/90 p-4 shadow-md backdrop-blur ${className}`}>
+        <div className={`rounded-lg bg-background/90 p-4 shadow-md backdrop-blur ${className}`} style={style}>
             <div className="flex items-start justify-between gap-3">
                 <div>
                     <h2 className="text-base font-medium">
