@@ -13,7 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { useMonths, useOceanMeta, useOceanOverlays } from "@/hooks/useOcean";
 import { useEvents } from "@/hooks/useEvents";
-import { eventMapTime, formatTime } from "@/lib/eventText";
+import { eventMapTime, formatTime, VARIABLE_WORDS } from "@/lib/eventText";
 import { cssGradient, getColourmap } from "@/lib/colourmap";
 import { PHASE_LABEL } from "@/lib/oceanApi";
 
@@ -201,6 +201,10 @@ export default function App() {
     });
 
     const opacityOf = (id) => opacities[id] ?? DEFAULT_OPACITY;
+
+    // The history strip's region-wide spells follow the top map layer (if it was analysed)
+    const spellVariable =
+        [...selected].reverse().find((id) => VARIABLE_WORDS[id]) ?? "temperature";
 
     // El Niño history: selecting an event jumps to when it hit hardest here, as an anomaly map
     const ensoList = useMemo(
@@ -416,6 +420,8 @@ export default function App() {
                     onTimeChange={setPickedMonth}
                     selectedId={selectedEventId}
                     onSelectEvent={selectEvent}
+                    spellVariable={spellVariable}
+                    regionalSpells={history.regionalSpells?.[spellVariable] ?? []}
                 />
             )}
         </div>

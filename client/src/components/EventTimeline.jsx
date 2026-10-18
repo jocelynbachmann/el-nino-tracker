@@ -5,16 +5,19 @@
  * (a day with daily data, a month with monthly data); click an event to select it.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { formatTime, PHASE_NAME } from "@/lib/eventText";
+import { formatTime, PHASE_NAME, VARIABLE_WORDS } from "@/lib/eventText";
 
 const COLOURS = { el_nino: "#b2182b", la_nina: "#2166ac", neutral: "#a8a29e" };
-const H = 92; // svg height
+const SPELL_COLOURS = { above: "#d6604d", below: "#4393c3" }; // same ends as the anomaly map
+const H = 110; // svg height
 const PAD_X = 8;
 const EVENT_Y = 4;
 const EVENT_H = 18;
 const ZERO_Y = 50;
 const BAR_SCALE = 9; // px per ONI unit
-const AXIS_Y = 88;
+const SPELL_Y = 78; // region-wide unusual spells row
+const SPELL_H = 12;
+const AXIS_Y = 106;
 
 // "YYYY-MM" or "YYYY-MM-DD" -> ms (UTC). Months start on the 1st.
 const toMs = (s) => {
@@ -57,6 +60,8 @@ export default function EventTimeline({
     onTimeChange,
     selectedId,
     onSelectEvent,
+    regionalSpells = [], // [{start, end, direction: "above"|"below", mean_sd}] for spellVariable
+    spellVariable = "temperature",
     className = "",
 }) {
     const boxRef = useRef(null);
@@ -115,6 +120,12 @@ export default function EventTimeline({
         return out;
     }, [n, t0, t1, width]);
 
+    const words = VARIABLE_WORDS[spellVariable];
+    const spellText = (sp) =>
+        `Whole region ${sp.direction === "above" ? words?.up : words?.down} than usual: ` +
+        `${formatTime(sp.start)} to ${formatTime(sp.end)} (average ${sp.mean_sd > 0 ? "+" : ""}${sp.mean_sd} SD)`;
+    const [hoverSpell, setHoverSpell] = useState(null);
+
     const shown = hover ?? time;
     const info = shown ? ensoByMonth.get(shown.slice(0, 7)) : null;
 
@@ -135,7 +146,9 @@ export default function EventTimeline({
                     </span>
                 </div>
                 <span className="tabular-nums text-muted-foreground">
-                    {shown && (
+                    {hoverSpell ? (
+                        <span className="text-foreground">{spellText(hoverSpell)}</span>
+                    ) : shown && (
                         <>
                             <span className="text-foreground">{formatTime(shown)}</span>
                             {info?.oni != null && ` · ONI ${info.oni > 0 ? "+" : ""}${Number(info.oni).toFixed(1)}`}
@@ -246,6 +259,49 @@ export default function EventTimeline({
                                     fill={COLOURS[e.phase] ?? COLOURS.neutral}
                                     opacity={e.phase === "neutral" ? 0.45 : 0.85}
                                 />
+                            );
+                        })}
+
+                        {/* region-wide unusual spells (change points on the box-average series) */}
+                        <text x={PAD_X} y={SPELL_Y - 3} fontSize={10} fill="var(--muted-foreground)">
+                            {`Whole region: ${words?.label?.toLowerCase() ?? spellVariable}`}
+                        </text>
+                        <rect
+                            x={PAD_X}
+                            y={SPELL_Y}
+                            width={inner}
+                            height={SPELL_H}
+                            rx={2}
+                            fill="var(--muted)"
+                            opacity={0.6}
+                        />
+                        {regionalSpells.map((sp) => {
+                            const a = Math.max(toMs(sp.start), t0);
+                            const b = Math.min(toMs(sp.end) + 86400000, t1);
+                            if (b <= a) return null;
+                            const strength = Math.min(1, 0.45 + Math.abs(sp.mean_sd) / 4);
+                            return (
+                                <rect
+                                    key={`${sp.start}-${sp.direction}`}
+                                    x={x(a)}
+                                    y={SPELL_Y}
+                                    width={Math.max(2, x(b) - x(a))}
+                                    height={SPELL_H}
+                                    rx={2}
+                                    fill={SPELL_COLOURS[sp.direction]}
+                                    opacity={strength}
+                                    className="cursor-pointer"
+                                    onPointerEnter={() => setHoverSpell(sp)}
+                                    onPointerLeave={() => setHoverSpell(null)}
+                                    onPointerDown={(e) => {
+                                        // jump to the middle of the spell
+                                        e.stopPropagation();
+                                        const mid = (toMs(sp.start) + toMs(sp.end)) / 2;
+                                        onTimeChange?.(times[nearest(ms, mid)]);
+                                    }}
+                                >
+                                    <title>{spellText(sp)}</title>
+                                </rect>
                             );
                         })}
 
