@@ -214,7 +214,6 @@ export default function App() {
             <WestCoastMap
                 className="h-full w-full"
                 overlays={overlays}
-                bounds={bounds}
                 showWeather={showWeather}
             />
 
