@@ -160,7 +160,7 @@ export default function WestCoastMap({
     useEffect(() => {
         const map = new MapLibreMap({
             container: containerRef.current,
-            style: "https://tiles.openfreemap.org/styles/positron",
+            style: "https://tiles.openfreemap.org/styles/fiord",
             bounds: boundsRef.current,
             fitBoundsOptions: { padding: 20 },
             interactive: false,
