@@ -7,6 +7,7 @@ Nothing is downloaded up front; each request reads only the chunks it needs.
 
 Overrides (environment variables):
   ELNINO_DATA   another location, e.g. a local folder copy of processed/
+  PRELOAD_DAILY=1  load all daily data into memory at startup (~1 GB; slower start, every map instant)
   AWS_PROFILE   another profile name
   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY  used instead of a profile if set
 
@@ -15,9 +16,15 @@ Expected files (any missing optional file just disables that feature):
   enso.json                                              optional - ENSO phase strip
   wind_monthly.zarr, wind_climatology.zarr              optional - wind charts
   forecast_mld.json                                      optional - written by the model notebook
+  analysis/events.json                                   optional - El Nino history (pipeline/analyze_events.py)
+  analysis/event_effects.zarr                            optional - per-event maps (start, duration, typical)
+  ocean_daily.zarr, daily_normal.zarr, meta_daily.json   optional - daily maps (pipeline/build_daily_store.py);
+                                                         when present the site works in days, not months
 """
 import json
 import os
+import threading
+from collections import OrderedDict
 from functools import lru_cache
 
 import numpy as np
@@ -54,13 +61,18 @@ def _path(name):
     return f"{DATA_DIR}/{name}"
 
 
+# Fail with an error instead of hanging forever when S3 doesn't answer
+S3_TIMEOUTS = {"config_kwargs": {"connect_timeout": 10, "read_timeout": 30,
+                                 "retries": {"max_attempts": 3, "mode": "standard"}}}
+
+
 def _storage_options():
     """Local folder: none. S3: key env vars if set, otherwise the hack-team profile."""
     if not IS_S3:
         return None
     if os.environ.get("AWS_ACCESS_KEY_ID") and not os.environ.get("AWS_PROFILE"):
-        return {}
-    return {"profile": os.environ.get("AWS_PROFILE", "hack-team")}
+        return dict(S3_TIMEOUTS)
+    return {"profile": os.environ.get("AWS_PROFILE", "hack-team"), **S3_TIMEOUTS}
 
 
 def _exists(name):
@@ -110,6 +122,27 @@ class DataStore:
         self.wind_clim = (_open_zarr("wind_climatology.zarr").load()
                           if _exists("wind_climatology.zarr") else None)
         self.reload_forecast()
+        self.events = _read_json("analysis/events.json", None)   # El Nino history analysis
+        self.effects = (_open_zarr("analysis/event_effects.zarr").load()   # ~10 MB: per-event maps
+                        if _exists("analysis/event_effects.zarr") else None)
+
+        # Daily maps (preferred when present). The normal is stored as coefficients and rebuilt per day,
+        # exactly as in the El Nino analysis, so anomaly maps match it.
+        self.daily = _open_zarr("ocean_daily.zarr") if _exists("ocean_daily.zarr") else None
+        if self.daily is not None:
+            self.daily_normal = _open_zarr("daily_normal.zarr").load()        # a few MB
+            self.meta_daily = _read_json("meta_daily.json", {})
+            self.days = pd.DatetimeIndex(self.daily.time.values)
+            self.day_index = {d.strftime("%Y-%m-%d"): i for i, d in enumerate(self.days)}
+            self.daily_lats = self.daily.latitude.values
+            self.daily_lons = self.daily.longitude.values
+            if os.environ.get("PRELOAD_DAILY") == "1":
+                print("Loading all daily data into memory (PRELOAD_DAILY=1)...", flush=True)
+                self.daily = self.daily.load()
+            # Each S3 read fetches a whole chunk (~a month of days). Keep recent chunks in memory so
+            # neighbouring days and switching back to a variable don't go back to S3.
+            self._blocks = OrderedDict()
+            self._blocks_lock = threading.Lock()
 
         self.lats = self.ocean.latitude.values
         self.lons = self.ocean.longitude.values
@@ -137,7 +170,9 @@ class DataStore:
                 return code
         return None
 
-    def var_meta(self, var):
+    def var_meta(self, var, daily=False):
+        if daily and self.daily is not None and var in self.meta_daily.get("variables", {}):
+            return self.meta_daily["variables"][var]
         return self.meta["variables"][var]
 
     def nearest_cell(self, lat, lon):
@@ -175,6 +210,88 @@ class DataStore:
             r = MODEL_REGION
             da = da.sel(latitude=slice(r["south"], r["north"]), longitude=slice(r["west"], r["east"]))
         return da.latitude.values, da.longitude.values, da.values, source
+
+    # ---------- El Nino analysis maps (pipeline/analyze_events.py) ----------
+    DAYS_PER_MONTH = 30.44
+
+    def effect_grid(self, event_id, slug, field):
+        """One event's effect at every point for one variable, or None.
+        field: onset (months after the event began, <0 = already under way), duration (months),
+        strength (peak, in SD of that point's own variability). Points with no clear change are NaN."""
+        ds = self.effects
+        if ds is None or event_id not in ds.event.values or slug not in ds.variable.values:
+            return None
+        sel = ds.sel(event=event_id, variable=slug)
+        if field == "onset":
+            v = sel["onset_days"].values / self.DAYS_PER_MONTH
+        elif field == "duration":
+            v = sel["duration_days"].values / self.DAYS_PER_MONTH
+        elif field == "strength":
+            v = sel["peak_z"].values
+        else:
+            return None
+        v = np.where(sel["detected"].values == 1, v, np.nan)
+        return ds.latitude.values, ds.longitude.values, v
+
+    def typical_grid(self, phase, slug):
+        """How consistently each point changed across all past events of a phase (el_nino / la_nina):
+        +1 = went up (warmer/saltier/higher/deeper) in every one, -1 = down in every one, 0 = no pattern."""
+        ds = self.effects
+        if ds is None or slug not in ds.variable.values or f"{phase}_mean_z" not in ds:
+            return None, 0
+        n = int(ds.attrs.get(f"n_{phase}", 0))
+        if n == 0:
+            return None, 0
+        sel = ds.sel(variable=slug)
+        mean_z = sel[f"{phase}_mean_z"].values
+        v = np.sign(mean_z) * sel[f"{phase}_n_same_sign"].values / n
+        return (ds.latitude.values, ds.longitude.values, v), n
+
+    # ---------- daily maps ----------
+    def daily_normal_map(self, var, day):
+        """The normal for one day at every point: design(day) @ coefficients (see build_daily_store.py)."""
+        a = self.daily_normal.attrs
+        y = (pd.Timestamp(day) - pd.Timestamp(a["origin"])).days / float(a["days_per_year"])
+        x = [1.0]
+        for k in range(1, int(a["harmonics"]) + 1):
+            x += [np.cos(2 * np.pi * k * y), np.sin(2 * np.pi * k * y)]
+        x.append(y - float(a["trend_origin_years"]))
+        return np.tensordot(np.asarray(x), self.daily_normal[var].values, axes=1)
+
+    MAX_BLOCKS = 120  # ~0.7 MB each
+
+    def _daily_block(self, var, i):
+        """The stored chunk of days containing day index i, as a numpy array (days, lat, lon)."""
+        da = self.daily[var]
+        size = da.chunks[0][0] if da.chunks else len(self.days)       # days per stored chunk
+        b = i // size
+        key = (var, b)
+        with self._blocks_lock:
+            if key in self._blocks:
+                self._blocks.move_to_end(key)
+                return self._blocks[key], i - b * size
+        block = da.isel(time=slice(b * size, (b + 1) * size)).values   # one S3 read
+        with self._blocks_lock:
+            self._blocks[key] = block
+            while len(self._blocks) > self.MAX_BLOCKS:
+                self._blocks.popitem(last=False)
+        return block, i - b * size
+
+    def grid_day(self, var, day, anomaly=False, model_region_only=False):
+        """One day as (lats, lons, 2D values, 'observed'), or None if that day isn't in the data."""
+        if self.daily is None or day not in self.day_index or var not in self.daily:
+            return None
+        block, k = self._daily_block(var, self.day_index[day])
+        values = block[k]
+        if anomaly:
+            values = values - self.daily_normal_map(var, day)
+        lats, lons = self.daily_lats, self.daily_lons
+        if model_region_only:
+            r = MODEL_REGION
+            i = (lats >= r["south"]) & (lats <= r["north"])
+            j = (lons >= r["west"]) & (lons <= r["east"])
+            lats, lons, values = lats[i], lons[j], values[np.ix_(i, j)]
+        return lats, lons, values, "observed"
 
     # ---------- time series ----------
     def point_series(self, var, lat, lon):

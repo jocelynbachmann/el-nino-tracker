@@ -11,8 +11,8 @@ import {
     normalizeVariables,
     toBounds,
     toMonths,
+    toDays,
     toRange,
-    toElNinoEvents,
 } from "@/lib/oceanApi";
 import { buildLut, getColourmap } from "@/lib/colourmap";
 import { gridToImage } from "@/lib/gridImage";
@@ -31,20 +31,20 @@ export function useOceanMeta() {
         ])
             .then(([meta, elNino, forecast]) => {
                 if (cancelled) return;
-                const observedMonths = toMonths(meta.observed_months);
-                const elNinoByMonth = new Map(
-                    (elNino ?? []).map((e) => [e.month?.slice(0, 7), e]),
-                );
                 setState({
                     loading: false,
                     error: null,
                     meta,
                     variables: normalizeVariables(meta).filter((v) => v.hasMap),
-                    observedMonths,
+                    // "day" once the daily store exists: maps are fetched per day, not per month
+                    timeStep: meta.time_step ?? "month",
+                    observedDays: toDays(meta.observed_days),
+                    observedMonths: toMonths(meta.observed_months),
                     forecastMonths: toMonths(meta.forecast_months),
                     bounds: toBounds(meta.bounds, meta.grid),
-                    elNinoByMonth,
-                    elNinoEvents: toElNinoEvents(elNinoByMonth, observedMonths),
+                    elNinoByMonth: new Map(
+                        (elNino ?? []).map((e) => [e.month?.slice(0, 7), e]),
+                    ),
                     forecastByMonth: new Map(
                         (forecast?.months ?? []).map((f) => [
                             f.month?.slice(0, 7),
@@ -68,10 +68,12 @@ export function useOceanMeta() {
     return state;
 }
 const imageCache = new Map();
+const MAX_CACHED_IMAGES = 400; // days add up quickly when scrubbing; drop the oldest
 
 function loadOverlay(variable, month, anomaly) {
     const key = `${variable.id}|${month}|${anomaly}`;
     if (imageCache.has(key)) return imageCache.get(key);
+    if (imageCache.size >= MAX_CACHED_IMAGES) imageCache.delete(imageCache.keys().next().value);
 
     const p = getMap(variable.id, month, { anomaly }).then((grid) => {
         const range =
