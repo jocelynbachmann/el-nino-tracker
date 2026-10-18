@@ -24,17 +24,47 @@ export function autoRange(values) {
 
 const valid = (v) => v != null && !Number.isNaN(v);
 
+// Copy ocean values into neighbouring land cells, `passes` cells deep, so the
+// colour reaches the real coastline once a detailed land layer is drawn on top
+function extendIntoLand(values, passes) {
+    let cur = values;
+    for (let n = 0; n < passes; n++) {
+        const next = cur.map((row) => row.slice());
+        for (let i = 0; i < cur.length; i++) {
+            for (let j = 0; j < cur[i].length; j++) {
+                if (valid(cur[i][j])) continue;
+                let sum = 0;
+                let k = 0;
+                for (let di = -1; di <= 1; di++) {
+                    for (let dj = -1; dj <= 1; dj++) {
+                        const v = cur[i + di]?.[j + dj];
+                        if (valid(v)) {
+                            sum += v;
+                            k++;
+                        }
+                    }
+                }
+                if (k) next[i][j] = sum / k;
+            }
+        }
+        cur = next;
+    }
+    return cur;
+}
 // options.scale:  output pixels per grid cell in each direction. The data is
 //                 only as detailed as the grid, but upsampling with bilinear
-//                 interpolation removes the blocky cells and smooths the coast.
+//                 interpolation removes the blocky cells.
 // options.smooth: false = one flat colour per cell (shows the raw grid).
+// options.extend: cells to spread ocean values onto land (default 0). Only use
+//                 with a land layer drawn on top, or the colour shows on land.
 export function gridToPixels(
     grid,
     lut,
     range,
-    { scale = 6, smooth = true } = {},
+    { scale = 6, smooth = true, extend = 0 } = {},
 ) {
-    const { latitudes: lats, longitudes: lons, values } = grid;
+    const { latitudes: lats, longitudes: lons } = grid;
+    const values = extend ? extendIntoLand(grid.values, extend) : grid.values;
     const nLat = lats.length;
     const nLon = lons.length;
 
@@ -46,7 +76,7 @@ export function gridToPixels(
     const west = lons[0] - dLon / 2;
     const east = lons[nLon - 1] + dLon / 2;
 
-    const [min, max] = range ?? autoRange(values);
+    const [min, max] = range ?? autoRange(grid.values);
     const span = max - min || 1;
 
     const width = Math.round(nLon * scale);
@@ -71,13 +101,15 @@ export function gridToPixels(
 
             let v;
             if (smooth) {
-                // Bilinear blend of the 4 surrounding cell centres, skipping land.
-                // A pixel is drawn only if at least half its weight is ocean, which
-                // puts the coastline between cells instead of on cell edges.
+                // Bilinear blend of the surrounding ocean cell centres for the colour,
+                // but draw the pixel whenever its nearest cell is ocean, so the coastline
+                // follows the grid cells and no coastal cells are dropped.
                 const i0 = Math.floor(fy);
                 const j0 = Math.floor(fx);
                 const ty = fy - i0;
                 const tx = fx - j0;
+                const nearest = cell(Math.round(fy), Math.round(fx));
+                if (!valid(nearest)) continue;
                 let sum = 0;
                 let w = 0;
                 for (const [di, dj, wt] of [
@@ -92,8 +124,9 @@ export function gridToPixels(
                         w += wt;
                     }
                 }
-                if (w < 0.5) continue; // mostly land: transparent
-                v = sum / w;
+                // if (w < 0.5) continue; // mostly land: transparent
+                // v = sum / w;
+                v = w > 0 ? sum / w : nearest;
             } else {
                 v = cell(Math.round(fy), Math.round(fx));
                 if (!valid(v)) continue;

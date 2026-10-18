@@ -33,6 +33,7 @@ const EMPTY = { type: "FeatureCollection", features: [] };
 function addWeatherLayers(map) {
     map.addSource("weather", {
         type: "geojson",
+        data: EMPTY,
         attribution:
             '<a href="https://open-meteo.com/">Weather data by Open-Meteo.com</a>',
     });
@@ -160,12 +161,62 @@ function addHerringLayer(map) {
     });
 }
 
-// place ocean raster under basemap labels
-function firstSymbolLayerId(map) {
-    return map
-        .getStyle()
-        .layers.find((l) => l.type === "symbol" && !l.id.startsWith("weather"))
-        ?.id;
+// // place ocean raster under basemap labels
+// function firstSymbolLayerId(map) {
+//     return map
+//         .getStyle()
+//         .layers.find((l) => l.type === "symbol" && !l.id.startsWith("weather"))
+//         ?.id;
+// }
+//
+
+// first basemap layer above the water, so roads and labels stay on top of the overlay
+function firstAboveWater(map) {
+    const layers = map.getStyle().layers;
+    const last = layers.findLastIndex((l) => l["source-layer"] === "water");
+    return layers[last + 1]?.id;
+}
+
+// Detailed land drawn over the ocean rasters, so their edge is the real coastline
+function addLandMask(map) {
+    const bg = map.getStyle().layers.find((l) => l.type === "background");
+    map.addSource("land", {
+        type: "geojson",
+        data: "/land.geojson",
+        attribution: "© OpenStreetMap contributors",
+    });
+    map.addLayer(
+        {
+            id: "land-mask",
+            type: "fill",
+            source: "land",
+            paint: {
+                "fill-color": map.getPaintProperty(bg.id, "background-color"),
+            },
+        },
+        firstAboveWater(map),
+    );
+}
+
+// Basemap polygons above the water (parks, landcover, landuse) reach into the sea
+// and cover the ocean overlay, so hide them
+function hideBasemapFills(map) {
+    const layers = map.getStyle().layers;
+    const above = layers.slice(
+        layers.findIndex((l) => l.id === "land-mask") + 1,
+    );
+    const hidden = new Set(
+        above
+        .filter((l) => l.type.startsWith("fill"))
+        .map((l) => l["source-layer"]),
+    );
+    for (const l of above) {
+        if (
+            l.type.startsWith("fill") ||
+                (l.type === "line" && hidden.has(l["source-layer"]))
+        )
+            map.setLayoutProperty(l.id, "visibility", "none");
+    }
 }
 
 /**
@@ -205,17 +256,11 @@ export default function WestCoastMap({
             attributionControl: { compact: true },
         });
         mapRef.current = map;
+        window.map = map; // debugging
         const urls = urlsRef.current;
 
         const fit = (why) => {
             const el = containerRef.current;
-            console.log(
-                "fit:",
-                why,
-                el?.clientWidth,
-                el?.clientHeight,
-                boundsRef.current,
-            );
             map.fitBounds(boundsRef.current, { padding: 20, animate: false });
         };
 
@@ -223,6 +268,8 @@ export default function WestCoastMap({
         map.on("resize", () => fit("resize"));
 
         map.on("load", () => {
+            addLandMask(map);
+            hideBasemapFills(map);
             addHerringLayer(map);
             addWeatherLayers(map);
             setLoaded(true);
@@ -268,7 +315,8 @@ export default function WestCoastMap({
             }
         }
 
-        const beforeId = firstSymbolLayerId(map);
+        // const beforeId = firstSymbolLayerId(map);
+        const beforeId = "land-mask";
 
         for (const o of overlays) {
             const id = OCEAN_PREFIX + o.id;

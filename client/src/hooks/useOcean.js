@@ -78,7 +78,8 @@ const MAX_CACHED_IMAGES = 400; // days add up quickly when scrubbing; drop the o
 function loadOverlay(variable, month, anomaly) {
     const key = `${variable.id}|${month}|${anomaly}`;
     if (imageCache.has(key)) return imageCache.get(key);
-    if (imageCache.size >= MAX_CACHED_IMAGES) imageCache.delete(imageCache.keys().next().value);
+    if (imageCache.size >= MAX_CACHED_IMAGES)
+        imageCache.delete(imageCache.keys().next().value);
 
     const p = getMap(variable.id, month, { anomaly }).then((grid) => {
         const range =
@@ -86,7 +87,7 @@ function loadOverlay(variable, month, anomaly) {
               toRange(anomaly ? variable.anomaly_range : variable.range) ??
               null; // null -> computed from the data
         const lut = buildLut(getColourmap(variable.colormap, { anomaly }));
-        const img = gridToImage(grid, lut, range);
+        const img = gridToImage(grid, lut, range, { extend: 2 });
         return {
             overlay: { url: img.url, coordinates: img.coordinates },
             range: img.range,

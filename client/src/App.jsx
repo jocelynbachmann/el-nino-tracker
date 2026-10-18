@@ -114,27 +114,27 @@ function LayerRow({
             className={`rounded-md px-2 py-1.5 transition-colors ${checked ? "bg-accent" : "hover:bg-accent/60"}`}
         >
             <div className="flex items-center gap-1.5">
-            <Label
-                htmlFor={id}
-                className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 font-normal"
-            >
-                <Checkbox
-                    id={id}
-                    checked={checked}
-                    onCheckedChange={(c) => onCheckedChange(c === true)}
-                />
-                <span className="flex-1 truncate">{variable.label}</span>
-                {checked && onTop && (
-                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                        top
-                    </span>
-                )}
-                {result?.loading && (
-                    <span className="text-xs text-muted-foreground">…</span>
-                )}
-            </Label>
-            {/* outside the label so clicking it doesn't toggle the layer */}
-            <VariableInfo id={variable.id} />
+                <Label
+                    htmlFor={id}
+                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 font-normal"
+                >
+                    <Checkbox
+                        id={id}
+                        checked={checked}
+                        onCheckedChange={(c) => onCheckedChange(c === true)}
+                    />
+                    <span className="flex-1 truncate">{variable.label}</span>
+                    {checked && onTop && (
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                            top
+                        </span>
+                    )}
+                    {result?.loading && (
+                        <span className="text-xs text-muted-foreground">…</span>
+                    )}
+                </Label>
+                {/* outside the label so clicking it doesn't toggle the layer */}
+                <VariableInfo id={variable.id} />
             </div>
 
             {checked && (
@@ -282,7 +282,9 @@ export default function App() {
     const [stripHeight, setStripHeight] = useState(180);
     useEffect(() => {
         if (!stripEl) return;
-        const ro = new ResizeObserver(() => setStripHeight(stripEl.getBoundingClientRect().height));
+        const ro = new ResizeObserver(() =>
+                                     setStripHeight(stripEl.getBoundingClientRect().height),
+        );
         ro.observe(stripEl);
         return () => ro.disconnect();
     }, [stripEl]);
@@ -414,7 +416,7 @@ export default function App() {
                 herringYear={herringYear}
             />
 
-            <div className="absolute left-4 top-4 z-10 max-h-[calc(100svh-2rem)] w-72 space-y-4 overflow-y-auto rounded-lg bg-background/90 p-4 shadow-md backdrop-blur">
+            <div className="absolute right-4 top-4 z-10 max-h-[calc(100svh-2rem)] w-72 space-y-4 overflow-y-auto rounded-lg bg-background/90 p-4 shadow-md backdrop-blur">
                 <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5">
                         <h2 className="text-sm font-medium">Ocean data</h2>
@@ -610,8 +612,10 @@ export default function App() {
 
             {selectedEvent && (
                 <EventCard
-                    className="absolute right-4 top-4 z-10 w-80 overflow-y-auto"
-                    style={{ maxHeight: `calc(100svh - ${Math.round(stripHeight) + 48}px)` }}
+                    className="absolute left-4 top-4 z-10 w-80 overflow-y-auto"
+                    style={{
+                        maxHeight: `calc(100svh - ${Math.round(stripHeight) + 48}px)`,
+                    }}
                     event={selectedEvent}
                     peakTime={eventMonth}
                     mapTime={month}
@@ -628,20 +632,23 @@ export default function App() {
             )}
 
             {!meta.error && months.length > 0 && (
-                <div ref={setStripEl} className="absolute bottom-4 left-80 right-4 z-10">
-                <EventTimeline
-                    enso={ensoList}
-                    events={history.events}
-                    times={months}
-                    time={month}
-                    onTimeChange={setPickedMonth}
-                    selectedId={selectedEventId}
-                    onSelectEvent={selectEvent}
-                    spellVariable={spellVariable}
-                    regionalSpells={
-                        history.regionalSpells?.[spellVariable] ?? []
-                    }
-                />
+                <div
+                    ref={setStripEl}
+                    className="absolute bottom-4 right-80 left-4 z-10"
+                >
+                    <EventTimeline
+                        enso={ensoList}
+                        events={history.events}
+                        times={months}
+                        time={month}
+                        onTimeChange={setPickedMonth}
+                        selectedId={selectedEventId}
+                        onSelectEvent={selectEvent}
+                        spellVariable={spellVariable}
+                        regionalSpells={
+                            history.regionalSpells?.[spellVariable] ?? []
+                        }
+                    />
                 </div>
             )}
         </div>
