@@ -5,6 +5,7 @@
 // "/ocean" is proxied to http://localhost:5001 in vite.config.js
 const BASE = import.meta.env?.VITE_OCEAN_API ?? "/ocean";
 const cache = new Map(); // caching so going back to a month is instant
+const EVENTS_SINCE = "2005-01";
 
 function get(path, { cached = false } = {}) {
     const url = BASE + path;
@@ -162,6 +163,49 @@ export function toBounds(b, grid) {
     }
     return null;
 }
+
+// El Niño Events that have map data, each with its peak (highest ONI) month
+// ONI: oceanic nino index - 3 month rolling average used to classifi nino, nina cycles
+export function toElNinoEvents(elNinoByMonth, observedMonths) {
+    if (!elNinoByMonth || !observedMonths) return [];
+    const events = [];
+    let current = null;
+
+    for (const month of observedMonths) {
+        const e = elNinoByMonth.get(month);
+        if (e?.phase !== "el_nino") {
+            current = null; // any other month (or a gap) ends the event
+            continue;
+        }
+        const oni = e.oni != null ? Number(e.oni) : null;
+        if (!current) {
+            current = {
+                id: month,
+                start: month,
+                end: month,
+                peakMonth: month,
+                peakOni: oni,
+            };
+            events.push(current);
+        } else {
+            current.end = month;
+            if (
+                oni != null &&
+                    (current.peakOni == null || oni > current.peakOni)
+            ) {
+                current.peakMonth = month;
+                current.peakOni = oni;
+            }
+        }
+    }
+
+    for (const ev of events) {
+        const y0 = ev.start.slice(0, 4);
+        const y1 = ev.end.slice(0, 4);
+        ev.label = y0 === y1 ? y0 : `${y0}–${y1.slice(2)}`;
+    }
+    return events.filter((ev) => ev.start >= EVENTS_SINCE);
+} // toElNinoYears
 
 export const PHASE_LABEL = {
     el_nino: "El Niño",
