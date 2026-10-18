@@ -106,6 +106,30 @@ function addWeatherLayers(map) {
     });
 }
 
+function addHerringLayer(map) {
+    map.addSource("herring", {
+        type: "geojson",
+        data: "/herring-spawn.geojson",
+        attribution:
+            "Herring spawn: Fisheries and Oceans Canada (Open Government Licence – Canada)",
+    });
+
+    map.addLayer({
+        id: "herring-spawn",
+        type: "circle",
+        source: "herring",
+        layout: { visibility: "none" },
+        filter: ["==", ["get", "year"], -1], // nothing until a year is set
+        paint: {
+            "circle-radius": 3,
+            "circle-color": "#7c3aed",
+            "circle-stroke-color": "#ffffff",
+            "circle-stroke-width": 0.5,
+            "circle-opacity": 0.9,
+        },
+    });
+}
+
 // place ocean raster under basemap labels
 function firstSymbolLayerId(map) {
     return map
@@ -124,6 +148,8 @@ export default function WestCoastMap({
     bounds = COAST_BOUNDS,
     overlays = [],
     showWeather = false,
+    showHerring = false,
+    herringYear = null,
 }) {
     const containerRef = useRef(null);
     const mapRef = useRef(null);
@@ -159,6 +185,7 @@ export default function WestCoastMap({
         map.on("resize", () => fit("resize"));
 
         map.on("load", () => {
+            addHerringLayer(map);
             addWeatherLayers(map);
             setLoaded(true);
         });
@@ -279,6 +306,21 @@ export default function WestCoastMap({
             }
         }
     }, [loaded, showWeather]);
+
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!loaded || !map?.getLayer("herring-spawn")) return;
+        map.setFilter("herring-spawn", [
+            "==",
+            ["get", "year"],
+            herringYear ?? -1,
+        ]);
+        map.setLayoutProperty(
+            "herring-spawn",
+            "visibility",
+            showHerring ? "visible" : "none",
+        );
+    }, [loaded, showHerring, herringYear]);
 
     return <div ref={containerRef} className={className} />;
 }

@@ -181,6 +181,7 @@ export default function App() {
     const [showWeather, setShowWeather] = useState(false);
     const [selectedEventId, setSelectedEventId] = useState(null);
     const [mapMode, setMapMode] = useState("day"); // for a selected event: day | onset | duration | typical
+    const [showHerring, setShowHerring] = useState(false);
     const [panelOpen, setPanelOpen] = useState(true); // left "Ocean data" panel
 
     // Height of the history strip, so the event card can stop above it (changes when minimized)
@@ -214,6 +215,7 @@ export default function App() {
         ? months.at(-1)
         : (meta.observedMonths?.at(-1) ?? months.at(-1) ?? null);
     const month = monthPos.has(pickedMonth) ? pickedMonth : defaultMonth;
+    const herringYear = month ? Number(month.slice(0, 4)) : null;
     const mapMonth = useDebounced(month, 150); // don't fetch every day the slider passes over
 
     const results = useOceanOverlays({
@@ -294,6 +296,8 @@ export default function App() {
                 className="h-full w-full"
                 overlays={overlays}
                 showWeather={showWeather}
+                showHerring={showHerring}
+                herringYear={herringYear}
             />
 
             <div className="absolute left-4 top-4 z-10 max-h-[calc(100svh-2rem)] w-72 space-y-4 overflow-y-auto rounded-lg bg-background/90 p-4 shadow-md backdrop-blur">
@@ -440,6 +444,16 @@ export default function App() {
                                 />
                             ))}
                         </div>
+
+                        <Separator />
+
+                        <Toggle
+                            id="layer-herring"
+                            label="Herring spawn"
+                            hint={`DFO, (${herringYear ?? "–"})`}
+                            checked={showHerring}
+                            onChange={setShowHerring}
+                        />
                     </>
                 )}
                 {/*
