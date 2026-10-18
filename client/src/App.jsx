@@ -7,7 +7,7 @@ import WestCoastMap from "@/components/WestCoastMap";
 import EventTimeline from "@/components/EventTimeline";
 import EventCard from "@/components/EventCard";
 import MinimizeButton from "@/components/MinimizeButton";
-import { OceanPanelHelp } from "@/components/HelpText";
+import { OceanPanelHelp, VariableInfo } from "@/components/HelpText";
 import EventList from "@/components/EventList";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -108,9 +108,10 @@ function LayerRow({
         <div
             className={`rounded-md px-2 py-1.5 transition-colors ${checked ? "bg-accent" : "hover:bg-accent/60"}`}
         >
+            <div className="flex items-center gap-1.5">
             <Label
                 htmlFor={id}
-                className="flex cursor-pointer items-center gap-3 font-normal"
+                className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 font-normal"
             >
                 <Checkbox
                     id={id}
@@ -127,6 +128,9 @@ function LayerRow({
                     <span className="text-xs text-muted-foreground">…</span>
                 )}
             </Label>
+            {/* outside the label so clicking it doesn't toggle the layer */}
+            <VariableInfo id={variable.id} />
+            </div>
 
             {checked && (
                 <div className="mt-2 space-y-2 pl-7">
@@ -170,7 +174,6 @@ export default function App() {
     const meta = useOceanMeta();
     const history = useEvents();
 
-    const bounds = meta.bounds ?? undefined;
     const [selected, setSelected] = useState(DEFAULT_LAYERS);
     const [opacities, setOpacities] = useState({});
     const [anomaly, setAnomaly] = useState(false);
@@ -178,7 +181,18 @@ export default function App() {
     const [showWeather, setShowWeather] = useState(false);
     const [selectedEventId, setSelectedEventId] = useState(null);
     const [mapMode, setMapMode] = useState("day"); // for a selected event: day | onset | duration | typical
+    const [showHerring, setShowHerring] = useState(false);
     const [panelOpen, setPanelOpen] = useState(true); // left "Ocean data" panel
+
+    // Height of the history strip, so the event card can stop above it (changes when minimized)
+    const [stripEl, setStripEl] = useState(null);
+    const [stripHeight, setStripHeight] = useState(180);
+    useEffect(() => {
+        if (!stripEl) return;
+        const ro = new ResizeObserver(() => setStripHeight(stripEl.getBoundingClientRect().height));
+        ro.observe(stripEl);
+        return () => ro.disconnect();
+    }, [stripEl]);
     const selectedVariables = useMemo(
         () =>
             selected
@@ -193,11 +207,15 @@ export default function App() {
     // ("month" below holds whichever: "YYYY-MM-DD" or "YYYY-MM".)
     const daily = meta.timeStep === "day" && meta.observedDays?.length > 0;
     const months = daily ? meta.observedDays : allMonths;
-    const monthPos = useMemo(() => new Map(months.map((m, i) => [m, i])), [months]);
+    const monthPos = useMemo(
+        () => new Map(months.map((m, i) => [m, i])),
+        [months],
+    );
     const defaultMonth = daily
         ? months.at(-1)
         : (meta.observedMonths?.at(-1) ?? months.at(-1) ?? null);
     const month = monthPos.has(pickedMonth) ? pickedMonth : defaultMonth;
+    const herringYear = month ? Number(month.slice(0, 4)) : null;
     const mapMonth = useDebounced(month, 150); // don't fetch every day the slider passes over
 
     const results = useOceanOverlays({
@@ -210,14 +228,16 @@ export default function App() {
 
     // The history strip's region-wide spells follow the top map layer (if it was analysed)
     const spellVariable =
-        [...selected].reverse().find((id) => VARIABLE_WORDS[id]) ?? "temperature";
+        [...selected].reverse().find((id) => VARIABLE_WORDS[id]) ??
+        "temperature";
 
     // El Niño history: selecting an event jumps to when it hit hardest here, as an anomaly map
     const ensoList = useMemo(
         () => Array.from(meta.elNinoByMonth?.values() ?? []),
         [meta.elNinoByMonth],
     );
-    const selectedEvent = history.events.find((e) => e.id === selectedEventId) ?? null;
+    const selectedEvent =
+        history.events.find((e) => e.id === selectedEventId) ?? null;
     const clampMonth = (m) =>
         monthPos.has(m) ? m : m > months.at(-1) ? months.at(-1) : months[0];
     const eventMonth = selectedEvent
@@ -227,19 +247,23 @@ export default function App() {
         setSelectedEventId(id);
         const ev = history.events.find((e) => e.id === id);
         if (ev) {
-            setPickedMonth(clampMonth(eventMapTime(ev, daily ? "day" : "month")));
+            setPickedMonth(
+                clampMonth(eventMapTime(ev, daily ? "day" : "month")),
+            );
             setAnomaly(true);
         }
     };
 
     // Analysis maps for the selected event (start / duration / past events) replace the day's layers
     const analysisMode = selectedEvent ? mapMode : "day";
-    const analysis = useAnalysisMap({ mode: analysisMode, event: selectedEvent, variable: spellVariable });
+    const analysis = useAnalysisMap({
+        mode: analysisMode,
+        event: selectedEvent,
+        variable: spellVariable,
+    });
 
     const overlays = useMemo(() => {
-        if (analysisMode !== "day") {
-            return analysis.overlay ? [{ id: "analysis", ...analysis.overlay, opacity: 0.9 }] : [];
-        }
+        if (analysisMode !== "day") return analysis.overlays ?? [];
         return selected
             .filter((id) => results[id]?.overlay)
             .map((id) => ({
@@ -247,7 +271,7 @@ export default function App() {
                 ...results[id].overlay,
                 opacity: opacityOf(id) / 100,
             }));
-    }, [selected, results, opacities, analysisMode, analysis.overlay]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [selected, results, opacities, analysisMode, analysis.overlays]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const toggleLayer = (id, on) =>
         setSelected((prev) => {
@@ -257,7 +281,10 @@ export default function App() {
 
     const monthIndex = monthPos.get(month) ?? 0;
     const isForecast =
-        !daily && month && meta.observedMonths && !meta.observedMonths.includes(month);
+        !daily &&
+        month &&
+        meta.observedMonths &&
+        !meta.observedMonths.includes(month);
     const enso = meta.elNinoByMonth?.get(month?.slice(0, 7));
     const forecast = isForecast ? meta.forecastByMonth?.get(month) : null;
     const loading =
@@ -268,8 +295,9 @@ export default function App() {
             <WestCoastMap
                 className="h-full w-full"
                 overlays={overlays}
-                bounds={bounds}
                 showWeather={showWeather}
+                showHerring={showHerring}
+                herringYear={herringYear}
             />
 
             <div className="absolute left-4 top-4 z-10 max-h-[calc(100svh-2rem)] w-72 space-y-4 overflow-y-auto rounded-lg bg-background/90 p-4 shadow-md backdrop-blur">
@@ -368,7 +396,9 @@ export default function App() {
                         <EventList
                             events={history.events}
                             selectedId={selectedEventId}
-                            onSelect={(id) => (id ? selectEvent(id) : setSelectedEventId(null))}
+                            onSelect={(id) =>
+                                id ? selectEvent(id) : setSelectedEventId(null)
+                            }
                         />
 
                         <Separator />
@@ -414,6 +444,16 @@ export default function App() {
                                 />
                             ))}
                         </div>
+
+                        <Separator />
+
+                        <Toggle
+                            id="layer-herring"
+                            label="Herring spawn"
+                            hint={`DFO, (${herringYear ?? "–"})`}
+                            checked={showHerring}
+                            onChange={setShowHerring}
+                        />
                     </>
                 )}
                 {/*
@@ -435,7 +475,8 @@ export default function App() {
 
             {selectedEvent && (
                 <EventCard
-                    className="absolute right-4 top-4 z-10 max-h-[calc(100svh-10rem)] w-80 overflow-y-auto"
+                    className="absolute right-4 top-4 z-10 w-80 overflow-y-auto"
+                    style={{ maxHeight: `calc(100svh - ${Math.round(stripHeight) + 48}px)` }}
                     event={selectedEvent}
                     peakTime={eventMonth}
                     mapTime={month}
@@ -452,8 +493,8 @@ export default function App() {
             )}
 
             {!meta.error && months.length > 0 && (
+                <div ref={setStripEl} className="absolute bottom-4 left-80 right-4 z-10">
                 <EventTimeline
-                    className="absolute bottom-4 left-80 right-4 z-10"
                     enso={ensoList}
                     events={history.events}
                     times={months}
@@ -462,8 +503,11 @@ export default function App() {
                     selectedId={selectedEventId}
                     onSelectEvent={selectEvent}
                     spellVariable={spellVariable}
-                    regionalSpells={history.regionalSpells?.[spellVariable] ?? []}
+                    regionalSpells={
+                        history.regionalSpells?.[spellVariable] ?? []
+                    }
                 />
+                </div>
             )}
         </div>
     );

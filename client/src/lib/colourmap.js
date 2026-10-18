@@ -126,6 +126,8 @@ const SCHEMES = {
         "#08519c",
         "#08306b",
     ],
+    // blues without the near-white end: short durations stay visible on a light basemap
+    blues_visible: ["#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#08519c", "#08306b"],
     reds: [
         "#fff5f0",
         "#fee0d2",

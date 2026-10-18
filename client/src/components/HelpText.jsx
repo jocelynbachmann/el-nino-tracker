@@ -92,7 +92,46 @@ export function EventHelp({ phaseName = "El Niño", plural = "El Niños" }) {
                     only sometimes.
                 </li>
             </ul>
-            <p>Blank spots had no clear change.</p>
+            <p>Striped spots were checked but had no clear change.</p>
+        </InfoTip>
+    );
+}
+
+// What each map variable is, in plain words (the "i" next to each layer)
+const VARIABLE_INFO = {
+    temperature: {
+        title: "Sea surface temperature",
+        text: "How warm the top few metres of the ocean are (°C). Warm water holds less oxygen and can stress shellfish, salmon and kelp. Marine heatwaves like the 2014–16 \"Blob\" show up here.",
+    },
+    salinity: {
+        title: "Sea surface salinity",
+        text: "How salty the surface water is (PSU, about grams of salt per kilogram of water). Lower means fresher, usually from rain, snowmelt and rivers like the Fraser and Columbia.",
+    },
+    "sea-surface-height": {
+        title: "Sea surface height",
+        text: "How high the sea surface sits (metres). Warm water expands and winds pile water against the coast, so El Niño years often raise coastal sea level. Differences in height also drive currents.",
+    },
+    "mixed-layer-depth": {
+        title: "Mixed layer depth",
+        text: "How deep the well-mixed surface layer reaches (metres). Winter storms and cooling stir it deeper; in summer it is shallow, keeping heat and plankton near the surface. A shallower layer can mean fewer nutrients brought up from below.",
+    },
+    "current-east": {
+        title: "Current (east)",
+        text: "Speed of the surface current flowing east (positive) or west (negative), in m/s, worked out from differences in sea surface height.",
+    },
+    "current-north": {
+        title: "Current (north)",
+        text: "Speed of the surface current flowing north (positive) or south (negative), in m/s, worked out from differences in sea surface height.",
+    },
+};
+
+export function VariableInfo({ id }) {
+    const info = VARIABLE_INFO[id];
+    if (!info) return null;
+    return (
+        <InfoTip title={info.title} icon="i" width={280}>
+            <p>{info.text}</p>
+            <p>Satellite and ocean-float data (Copernicus ARMOR3D), daily, about 14 km grid.</p>
         </InfoTip>
     );
 }

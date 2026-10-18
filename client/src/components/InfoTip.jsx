@@ -8,7 +8,8 @@ import { createPortal } from "react-dom";
 
 const GAP = 6;
 
-export default function InfoTip({ title, children, side = "bottom", align = "start", width = 300 }) {
+// icon: "?" for how-to help (default), "i" for "what is this" descriptions
+export default function InfoTip({ title, children, side = "bottom", align = "start", width = 300, icon = "?" }) {
     const btnRef = useRef(null);
     const popRef = useRef(null);
     const [pos, setPos] = useState(null); // null = closed
@@ -51,15 +52,15 @@ export default function InfoTip({ title, children, side = "bottom", align = "sta
                 type="button"
                 onClick={() => (pos ? setPos(null) : open())}
                 aria-expanded={!!pos}
-                aria-label={`How this works: ${title}`}
-                title="How this works"
+                aria-label={icon === "?" ? `How this works: ${title}` : `About ${title}`}
+                title={icon === "?" ? "How this works" : `About ${title}`}
                 className={`inline-flex size-5 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold leading-none ${
                     pos
                         ? "border-foreground bg-foreground text-background"
                         : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
                 }`}
             >
-                i
+                {icon}
             </button>
             {pos &&
                 createPortal(

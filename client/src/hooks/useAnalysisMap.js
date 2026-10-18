@@ -6,9 +6,25 @@
 import { useEffect, useState } from "react";
 import { getEventMap, getTypicalMap, toRange } from "@/lib/oceanApi";
 import { buildLut, getColourmap } from "@/lib/colourmap";
-import { gridToImage } from "@/lib/gridImage";
+import { gridToImage, gridToPixels } from "@/lib/gridImage";
 
 const cache = new Map();
+export const NO_CHANGE_RGB = [120, 113, 108]; // grey stripes for "checked, no clear change"
+
+// Diagonal grey stripes over the cells marked 1: "checked, no clear change" (plain grey looks like water)
+function hatchedImage(grid) {
+    const px = gridToPixels(grid, buildLut(() => NO_CHANGE_RGB), [0, 1], { scale: 8 });
+    for (let r = 0; r < px.height; r++) {
+        for (let c = 0; c < px.width; c++) {
+            if ((r + c) % 9 >= 3) px.data[(r * px.width + c) * 4 + 3] = 0; // keep 3 of every 9 diagonals
+        }
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = px.width;
+    canvas.height = px.height;
+    canvas.getContext("2d").putImageData(new ImageData(px.data, px.width, px.height), 0, 0);
+    return { url: canvas.toDataURL(), coordinates: px.coordinates };
+}
 
 function load(mode, event, variable) {
     const key = `${mode}|${event.id}|${variable}`;
@@ -21,7 +37,16 @@ function load(mode, event, variable) {
         const lut = buildLut(getColourmap(grid.colormap));
         const img = gridToImage(grid, lut, toRange(grid.color_range));
         const anyValue = grid.values.some((row) => row.some((v) => v != null));
+        // spots that were checked but had no clear change: flat grey, drawn underneath
+        const overlays = [];
+        if (grid.no_change?.some((row) => row.some((v) => v != null))) {
+            const grey = hatchedImage({ latitudes: grid.latitudes, longitudes: grid.longitudes, values: grid.no_change });
+            overlays.push({ id: "analysis-none", url: grey.url, coordinates: grey.coordinates, opacity: 0.9 });
+        }
+        overlays.push({ id: "analysis", url: img.url, coordinates: img.coordinates, opacity: 0.9 });
         return {
+            overlays,
+            hasNoChange: overlays.length > 1,
             overlay: { url: img.url, coordinates: img.coordinates },
             range: toRange(grid.color_range),
             colormap: grid.colormap,
