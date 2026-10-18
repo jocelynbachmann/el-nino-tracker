@@ -20,8 +20,8 @@ setWorkerUrl(workerUrl);
 // [-134, 46],
 // [-120, 53],
 const COAST_BOUNDS = [
-    [-135, 47],
-    [-121, 54],
+    [-128.175, 46.17],
+    [-122.8, 51.89],
 ];
 
 const WEATHER_LAYER_IDS = ["weather-circles", "weather-temps", "weather-names"];

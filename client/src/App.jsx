@@ -174,7 +174,6 @@ export default function App() {
     const meta = useOceanMeta();
     const history = useEvents();
 
-    const bounds = meta.bounds ?? undefined;
     const [selected, setSelected] = useState(DEFAULT_LAYERS);
     const [opacities, setOpacities] = useState({});
     const [anomaly, setAnomaly] = useState(false);
@@ -207,7 +206,10 @@ export default function App() {
     // ("month" below holds whichever: "YYYY-MM-DD" or "YYYY-MM".)
     const daily = meta.timeStep === "day" && meta.observedDays?.length > 0;
     const months = daily ? meta.observedDays : allMonths;
-    const monthPos = useMemo(() => new Map(months.map((m, i) => [m, i])), [months]);
+    const monthPos = useMemo(
+        () => new Map(months.map((m, i) => [m, i])),
+        [months],
+    );
     const defaultMonth = daily
         ? months.at(-1)
         : (meta.observedMonths?.at(-1) ?? months.at(-1) ?? null);
@@ -224,14 +226,16 @@ export default function App() {
 
     // The history strip's region-wide spells follow the top map layer (if it was analysed)
     const spellVariable =
-        [...selected].reverse().find((id) => VARIABLE_WORDS[id]) ?? "temperature";
+        [...selected].reverse().find((id) => VARIABLE_WORDS[id]) ??
+        "temperature";
 
     // El Niño history: selecting an event jumps to when it hit hardest here, as an anomaly map
     const ensoList = useMemo(
         () => Array.from(meta.elNinoByMonth?.values() ?? []),
         [meta.elNinoByMonth],
     );
-    const selectedEvent = history.events.find((e) => e.id === selectedEventId) ?? null;
+    const selectedEvent =
+        history.events.find((e) => e.id === selectedEventId) ?? null;
     const clampMonth = (m) =>
         monthPos.has(m) ? m : m > months.at(-1) ? months.at(-1) : months[0];
     const eventMonth = selectedEvent
@@ -241,14 +245,20 @@ export default function App() {
         setSelectedEventId(id);
         const ev = history.events.find((e) => e.id === id);
         if (ev) {
-            setPickedMonth(clampMonth(eventMapTime(ev, daily ? "day" : "month")));
+            setPickedMonth(
+                clampMonth(eventMapTime(ev, daily ? "day" : "month")),
+            );
             setAnomaly(true);
         }
     };
 
     // Analysis maps for the selected event (start / duration / past events) replace the day's layers
     const analysisMode = selectedEvent ? mapMode : "day";
-    const analysis = useAnalysisMap({ mode: analysisMode, event: selectedEvent, variable: spellVariable });
+    const analysis = useAnalysisMap({
+        mode: analysisMode,
+        event: selectedEvent,
+        variable: spellVariable,
+    });
 
     const overlays = useMemo(() => {
         if (analysisMode !== "day") return analysis.overlays ?? [];
@@ -269,7 +279,10 @@ export default function App() {
 
     const monthIndex = monthPos.get(month) ?? 0;
     const isForecast =
-        !daily && month && meta.observedMonths && !meta.observedMonths.includes(month);
+        !daily &&
+        month &&
+        meta.observedMonths &&
+        !meta.observedMonths.includes(month);
     const enso = meta.elNinoByMonth?.get(month?.slice(0, 7));
     const forecast = isForecast ? meta.forecastByMonth?.get(month) : null;
     const loading =
@@ -280,7 +293,6 @@ export default function App() {
             <WestCoastMap
                 className="h-full w-full"
                 overlays={overlays}
-                bounds={bounds}
                 showWeather={showWeather}
             />
 
@@ -380,7 +392,9 @@ export default function App() {
                         <EventList
                             events={history.events}
                             selectedId={selectedEventId}
-                            onSelect={(id) => (id ? selectEvent(id) : setSelectedEventId(null))}
+                            onSelect={(id) =>
+                                id ? selectEvent(id) : setSelectedEventId(null)
+                            }
                         />
 
                         <Separator />
@@ -475,7 +489,9 @@ export default function App() {
                     selectedId={selectedEventId}
                     onSelectEvent={selectEvent}
                     spellVariable={spellVariable}
-                    regionalSpells={history.regionalSpells?.[spellVariable] ?? []}
+                    regionalSpells={
+                        history.regionalSpells?.[spellVariable] ?? []
+                    }
                 />
                 </div>
             )}
