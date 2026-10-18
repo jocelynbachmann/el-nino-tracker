@@ -22,7 +22,9 @@ Terms:
 """
 
 import json
+import sys
 import warnings
+from pathlib import Path
 
 import boto3
 import numpy as np
@@ -31,8 +33,6 @@ import s3fs
 import xarray as xr
 import zarr
 from sklearn.ensemble import HistGradientBoostingRegressor
-from sklearn.inspection import permutation_importance
-from sklearn.metrics import mean_squared_error, r2_score
 
 
 # --- 1. Connect to the data -------------------------------------------------------
@@ -318,62 +318,6 @@ model = HistGradientBoostingRegressor(max_iter=500, learning_rate=0.05,
 w = np.where(train.enso_state == 1, EL_NINO_WEIGHT, 1.0)
 model.fit(train[feats], train.target, sample_weight=w)
 
-# The model predicts the anomaly; add the normal back to get MLD in metres
-test["pred"] = test.y_clim + model.predict(test[feats])
-
-
-# --- 10. Evaluate -----------------------------------------------------------------
-# Baseline = "just predict the normal MLD for that month". The model has to beat this.
-# R² is scored on the anomaly (MLD minus normal): on raw MLD the seasons alone would
-# give a high R², even for the baseline.
-rmse = lambda p: mean_squared_error(test.y, p) ** 0.5
-print(f"rows: train {len(train):,}  test {len(test):,}")
-print(f"climatology RMSE (train-years only): {rmse(test.y_clim):.2f} m")
-print(f"model RMSE:                          {rmse(test.pred):.2f} m")
-print(f"skill vs climatology:                {1 - rmse(test.pred) / rmse(test.y_clim):.2f}"
-      "   (0 = no better than the normals, 1 = perfect)")
-print(f"anomaly R²:                          {r2_score(test.target, test.pred - test.y_clim):.2f}"
-      "   (share of the unusual part explained)")
-print(f"raw-MLD R²: model {r2_score(test.y, test.pred):.2f}, "
-      f"climatology alone {r2_score(test.y, test.y_clim):.2f}   (the gap is what the model adds)")
-# Error by calendar month (winter is usually hardest)
-by_m = test.groupby("month").apply(lambda g: pd.Series({
-    "clim": mean_squared_error(g.y, g.y_clim) ** 0.5,
-    "model": mean_squared_error(g.y, g.pred) ** 0.5}))
-print(by_m.round(1))
-
-# Error by El Niño state - the El Niño row is the one we care most about. The test years
-# hold only one El Niño (2023-24), so that row is one case study, not a general result.
-state = test.enso_state.map({1: "El Niño", 0: "Neutral", -1: "La Niña"}).fillna("unknown")
-by_enso = test.groupby(state).apply(lambda g: pd.Series({
-    "months": g.time.nunique(),
-    "clim": mean_squared_error(g.y, g.y_clim) ** 0.5,
-    "model": mean_squared_error(g.y, g.pred) ** 0.5}))
-print(by_enso.round(1))
-
-
-# --- 11. Feature importance -------------------------------------------------------
-# Shuffle one feature at a time and measure how much worse the model gets.
-# Big drop = the model relies on it; ~0 = barely used.
-sample = test.sample(min(5000, len(test)), random_state=0)
-imp = permutation_importance(model, sample[feats], sample.target, n_repeats=5, random_state=0)
-print(pd.Series(imp.importances_mean, index=feats).sort_values(ascending=False).round(3))
-
-# --- 11b. Long-term drift ------------------------------------------------------------
-# t_years shows ~0 in the importance list whatever it does: every test month sits in the same
-# "latest years" branch, so shuffling it among them changes nothing. These show it directly.
-# 1. In the data: average MLD minus its 1993-2019 normal, by year (negative = shallower than normal)
-print(df.groupby(df.time.dt.year).target.mean().round(2))
-
-# 2. In the model: the same test rows predicted as if they came from each year
-s = test.sample(5000, random_state=0)
-effect = {}
-for yr in range(1994, 2010):
-    X = s[feats].copy()
-    X["t_years"] = (yr - T0.year) + X["t_years"] % 1      # keep the month, change the year
-    effect[yr] = model.predict(X).mean()
-effect["2010+"] = model.predict(s[feats]).mean()
-print(pd.Series(effect).round(2))
 
 # --- 12. Predict an MLD map for one month ---------------------------------------------
 def predict_month(when):
@@ -468,3 +412,218 @@ def predict_mld(temp, salinity, wind_speed, surface_height, north_wind, east_win
 
     anomaly = model.predict(pd.DataFrame([x])[feats])[0]
     return float(norm.y_clim + anomaly)
+
+
+# --- 14. Forecast MLD at every point from SEAS5 -----------------------------------------
+# Runs the model on the ECMWF SEAS5 seasonal forecast in future/clean: every one of the 51
+# ensemble members, for every forecast month, at every point of the model's own 1/4 degree
+# grid. The members' predictions give the forecast (their mean) and its uncertainty
+# (10th-90th percentile).
+#
+#   forecast_points("2027-01")    one month, one row per point: lat, lon, mld, mld_p10, mld_p90, normal
+#   save_forecast()               every month, written as forecast_mld_grid.json for the map
+#   python "train copy.py" 2027-01        save that month's points as a CSV, and the forecast
+#
+# SEAS5 is on a 1 degree grid, 4x coarser than the model's, so:
+#   1. Each SEAS5 value is compared with the normal averaged over its 1 degree cell -> anomaly.
+#   2. Those anomalies are interpolated to the 1/4 degree points (SEAS5 land cells near the
+#      coast take the nearest ocean cell's anomaly, so the forecast reaches the coast).
+#   3. Each point's own normals are used as usual. The fine detail in the map comes from them;
+#      SEAS5 only says how this season differs from normal, at its own 1 degree scale.
+#
+# Inputs, SEAS5 -> model:  2 m air temperature -> sst (SEAS5's ocean file has no SST, so air
+# temperature stands in for it), sos -> sss, zos -> ssh, u10 -> u, v10 -> v, si10 -> speed.
+# These are not bias-corrected to the training data: check the input anomalies printed by
+# forecast_points() - a large offset that is the same everywhere is model bias, not weather.
+SEAS5_CSV = Path(__file__).resolve().parent.parent / "future" / "clean" / "seas5_merged_full.csv"
+GRID_JSON = "forecast_mld_grid.json"      # read by the server for the map's forecast layer
+
+# Forecast ONI / PDO for months after the observed files end, e.g. {"2026-09": 2.1, ...}
+# (ONI: NOAA CPC / IRI ENSO outlook). Months not given hold the last observed value.
+ONI_FORECAST = {}
+PDO_FORECAST = {}
+
+SEAS5_COLUMNS = {"t2m_c": "sst", "sos": "sss", "zos": "ssh", "u10": "u", "v10": "v", "si10": "speed"}
+INPUTS = values[1:]                       # sst, sss, ssh, u, v, speed
+
+
+def extend_monthly(obs, forecast, until, name):
+    """Monthly series (indexed by month start) continued up to `until`: observed values first,
+    then `forecast` values, then the last known value held, with a warning."""
+    s = obs.copy()
+    if forecast:
+        extra = pd.Series({pd.Timestamp(k): float(v) for k, v in forecast.items()})
+        s = pd.concat([s, extra[~extra.index.isin(s.index)]]).sort_index()
+    gap = pd.date_range(s.index.max() + pd.offsets.MonthBegin(1), until, freq="MS")
+    if len(gap):
+        warnings.warn(f"No {name} for {gap[0]:%Y-%m} to {gap[-1]:%Y-%m}: holding {s.iloc[-1]:.2f} "
+                      f"(from {s.index.max():%Y-%m}). Set {name}_FORECAST to use forecast values.")
+        s = pd.concat([s, pd.Series(s.iloc[-1], index=gap)])
+    return s
+
+
+def load_seas5(path=SEAS5_CSV):
+    """seas5_merged_full.csv -> one row per member, month and ocean point, with model input names."""
+    fc = pd.read_csv(path)
+    fc = fc[fc.is_ocean.astype(str).str.lower() == "true"].rename(columns=SEAS5_COLUMNS)
+    fc = fc.dropna(subset=list(SEAS5_COLUMNS.values()))
+    fc["time"] = pd.to_datetime(fc.month, format="%Y-%m")
+    return fc.drop(columns="month")
+
+
+def seas5_anomalies(fc):
+    """Steps 1-2 above: SEAS5 rows -> input anomalies at every model grid point.
+    Returns one row per member, month and model ocean point (latitude, longitude, *_anom)."""
+    # 1. Normals averaged over each 1 degree SEAS5 cell (centres at x.5, so cell = floor + 0.5)
+    clim_cols = [c + "_clim" for c in INPUTS]
+    cell_norm = (normals.assign(lat=np.floor(normals.latitude) + 0.5, lon=np.floor(normals.longitude) + 0.5)
+                 .groupby(["month", "lat", "lon"])[clim_cols].mean().reset_index())
+    fc = fc.assign(month=fc.time.dt.month).merge(cell_norm, on=["month", "lat", "lon"], how="inner")
+
+    # One 1 degree grid of anomalies per (member, month): A[group, input, lat, lon]
+    lats1, lons1 = np.sort(fc.lat.unique()), np.sort(fc.lon.unique())
+    by = fc.groupby(["member", "time"], sort=True)
+    g = by.ngroup().values                                   # group number of each row
+    groups = by.size().index.to_frame(index=False)           # (member, time) of each group number
+    i, j = np.searchsorted(lats1, fc.lat.values), np.searchsorted(lons1, fc.lon.values)
+    A = np.full((len(groups), len(INPUTS), len(lats1), len(lons1)), np.nan)
+    for k, c in enumerate(INPUTS):
+        A[g, k, i, j] = (fc[c] - fc[c + "_clim"]).values
+
+    # Cells that are land (in any member) take the nearest ocean cell's anomaly
+    ocean = ~np.isnan(A).any(axis=(0, 1))
+    oi, oj = np.nonzero(ocean)
+    for li, lj in zip(*np.nonzero(~ocean)):
+        n = np.argmin((oi - li) ** 2 + (oj - lj) ** 2)
+        A[:, :, li, lj] = A[:, :, oi[n], oj[n]]
+
+    # 2. Bilinear interpolation to the model's points (clamped at the edges of the SEAS5 grid)
+    pts = normals[["latitude", "longitude"]].drop_duplicates().reset_index(drop=True)
+    fy = np.clip(np.interp(pts.latitude, lats1, np.arange(len(lats1))), 0, len(lats1) - 1)
+    fx = np.clip(np.interp(pts.longitude, lons1, np.arange(len(lons1))), 0, len(lons1) - 1)
+    i0 = np.minimum(np.floor(fy).astype(int), len(lats1) - 2)
+    j0 = np.minimum(np.floor(fx).astype(int), len(lons1) - 2)
+    ty, tx = fy - i0, fx - j0
+    fine = (A[..., i0, j0] * (1 - ty) * (1 - tx) + A[..., i0, j0 + 1] * (1 - ty) * tx
+            + A[..., i0 + 1, j0] * ty * (1 - tx) + A[..., i0 + 1, j0 + 1] * ty * tx)  # [group, input, point]
+
+    out = pd.DataFrame({
+        "member": np.repeat(groups.member.values, len(pts)),
+        "time": np.repeat(groups.time.values, len(pts)),
+        "latitude": np.tile(pts.latitude.values, len(groups)),
+        "longitude": np.tile(pts.longitude.values, len(groups)),
+    })
+    for k, c in enumerate(INPUTS):
+        out[c + "_anom"] = fine[:, k, :].ravel()
+    return out
+
+
+def predict_seas5(seas5=None):
+    """Model prediction for every SEAS5 member, month and model grid point (one row each)."""
+    fc = load_seas5() if seas5 is None else seas5
+    fc = seas5_anomalies(fc)
+    fc["month"] = fc.time.dt.month
+    fc = fc.merge(normals[keys + ["y_clim", "sst_clim"]], on=keys, how="inner")   # 3. each point's normals
+    fc["t_years"] = (fc.time - T0).dt.total_seconds() / (365.25 * 24 * 3600)
+
+    # ONI and PDO: one value per month, the same for every member and point
+    last = fc.time.max()
+    oni = extend_monthly(oni_obs.set_index("time").oni, ONI_FORECAST, last, "ONI")
+    fc["ym"] = fc.time
+    fc = fc.merge(oni_monthly(oni.rename_axis("time").rename("oni").reset_index()), on="ym", how="left")
+    if PDO_FEATS:
+        pdo = extend_monthly(pdo_obs, PDO_FORECAST, last, "PDO")
+        fc = fc.merge(pdo_monthly(pdo), on="ym", how="left")
+    fc = fc.drop(columns="ym")
+    gaps = fc[ONI_FEATS + PDO_FEATS].isna().any(axis=1)
+    if gaps.any():
+        raise ValueError(f"Missing ONI/PDO features for {sorted(fc.time[gaps].dt.strftime('%Y-%m').unique())}: "
+                         "check ONI_FORECAST / PDO_FORECAST for gaps")
+
+    fc["mld"] = fc.y_clim + model.predict(fc[feats])
+    return fc
+
+
+def summarize_points(pred):
+    """Members -> one row per month and point: mean MLD, 10th/90th percentile, normal."""
+    g = pred.groupby(["time", "latitude", "longitude"])
+    out = g.agg(mld=("mld", "mean"), normal=("y_clim", "first"), members=("member", "nunique"))
+    out["mld_p10"] = g.mld.quantile(0.1)
+    out["mld_p90"] = g.mld.quantile(0.9)
+    out["mld_anomaly"] = out.mld - out.normal
+    return out.reset_index().rename(columns={"latitude": "lat", "longitude": "lon"})
+
+
+def forecast_points(month, seas5=None):
+    """Forecast MLD (metres) at every model grid point for one month, e.g. "2027-01".
+    One row per point: lat, lon, mld (ensemble mean), mld_p10, mld_p90, normal, mld_anomaly."""
+    fc = load_seas5() if seas5 is None else seas5
+    when = pd.Timestamp(month)
+    if not (fc.time == when).any():
+        raise ValueError(f"No SEAS5 data for {month}. Available: "
+                         f"{', '.join(sorted(fc.time.dt.strftime('%Y-%m').unique()))}")
+    pred = predict_seas5(fc[fc.time == when])
+    print(f"{month} input anomalies vs normal, averaged over points and members:")
+    print(pred[[f"{c}_anom" for c in INPUTS]].mean().round(3).to_string())
+    return summarize_points(pred).drop(columns="time")
+
+
+def save_forecast(seas5=None, upload=True):
+    """Forecast every SEAS5 month at every point and write forecast_mld_grid.json for the
+    server (to the team folder on S3, plus a local copy next to the SEAS5 file).
+    The grid is the model's full 1/4 degree grid, south -> north and west -> east; land is null."""
+    fc = load_seas5() if seas5 is None else seas5
+    cells = summarize_points(predict_seas5(fc))
+    lats, lons = np.sort(wd.latitude.values), np.sort(wd.longitude.values)
+
+    def grid(month_rows, col):
+        g = month_rows.pivot(index="lat", columns="lon", values=col).reindex(index=lats, columns=lons)
+        return [[None if np.isnan(v) else round(float(v), 2) for v in row] for row in g.values]
+
+    months = []
+    for t, rows in cells.groupby("time"):
+        months.append({"month": f"{t:%Y-%m}",
+                       "regional_mld": round(float(rows.mld.mean()), 2),
+                       "regional_anomaly": round(float(rows.mld_anomaly.mean()), 2),
+                       "mld": grid(rows, "mld"), "lower": grid(rows, "mld_p10"),
+                       "upper": grid(rows, "mld_p90"), "normal": grid(rows, "normal")})
+    result = {
+        "issued": str(fc.init_date.iloc[0])[:10],
+        "model": "train copy.py: HistGradientBoosting on MLD anomaly",
+        "inputs": f"ECMWF SEAS5, {fc.member.nunique()} members, anomalies interpolated from 1 to 1/4 degree "
+                  "(2 m air temperature stands in for SST)",
+        "band": "10th-90th percentile across members",
+        "oni_forecast": ONI_FORECAST or "last observed ONI held",
+        "latitudes": [round(float(x), 4) for x in lats],
+        "longitudes": [round(float(x), 4) for x in lons],
+        "months": months,
+    }
+
+    local = SEAS5_CSV.parent / GRID_JSON
+    with open(local, "w") as f:
+        json.dump(result, f)
+    print(f"Wrote {local}")
+    if upload:
+        target = f"{OUT_DIR}/{GRID_JSON}"
+        if fs.exists(target):   # keep the previous run, as train_v2.py does
+            backup = f"{OUT_DIR}/backups/{GRID_JSON[:-5]}_{pd.Timestamp.now():%Y%m%d-%H%M%S}.json"
+            fs.copy(target, backup)
+            print(f"Previous {GRID_JSON} backed up to s3://{backup}")
+        with fs.open(target, "w") as f:
+            json.dump(result, f)
+        print(f"Wrote s3://{target}  (the map's forecast layer reads this)")
+    return cells
+
+
+if __name__ == "__main__":
+    # python "train copy.py" [YYYY-MM ...] [--no-upload]
+    args = sys.argv[1:]
+    seas5 = load_seas5()
+    for month in [a for a in args if not a.startswith("--")]:
+        pts = forecast_points(month, seas5)
+        out = SEAS5_CSV.parent / f"mld_forecast_{month}.csv"
+        pts.round(2).to_csv(out, index=False)
+        print(f"MLD forecast {month}: area average {pts.mld.mean():.1f} m, normal {pts.normal.mean():.1f} m, "
+              f"80% range {pts.mld_p10.mean():.1f}-{pts.mld_p90.mean():.1f} m  ({len(pts)} points) -> {out}\n")
+    cells = save_forecast(seas5, upload="--no-upload" not in args)
+    print(cells.groupby("time")[["mld", "normal", "mld_p10", "mld_p90"]].mean().round(1))
