@@ -12,6 +12,7 @@ import {
     toBounds,
     toMonths,
     toRange,
+    toElNinoEvents,
 } from "@/lib/oceanApi";
 import { buildLut, getColourmap } from "@/lib/colourmap";
 import { gridToImage } from "@/lib/gridImage";
@@ -30,17 +31,20 @@ export function useOceanMeta() {
         ])
             .then(([meta, elNino, forecast]) => {
                 if (cancelled) return;
+                const observedMonths = toMonths(meta.observed_months);
+                const elNinoByMonth = new Map(
+                    (elNino ?? []).map((e) => [e.month?.slice(0, 7), e]),
+                );
                 setState({
                     loading: false,
                     error: null,
                     meta,
                     variables: normalizeVariables(meta).filter((v) => v.hasMap),
-                    observedMonths: toMonths(meta.observed_months),
+                    observedMonths,
                     forecastMonths: toMonths(meta.forecast_months),
                     bounds: toBounds(meta.bounds, meta.grid),
-                    elNinoByMonth: new Map(
-                        (elNino ?? []).map((e) => [e.month?.slice(0, 7), e]),
-                    ),
+                    elNinoByMonth,
+                    elNinoEvents: toElNinoEvents(elNinoByMonth, observedMonths),
                     forecastByMonth: new Map(
                         (forecast?.months ?? []).map((f) => [
                             f.month?.slice(0, 7),

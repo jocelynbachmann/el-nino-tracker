@@ -3,6 +3,7 @@
  * TODO: a lot of this can be moved to a component
  */
 import { useEffect, useMemo, useState } from "react";
+import ElNinoStats from "@/components/El9ioStats";
 import WestCoastMap from "@/components/WestCoastMap";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -150,13 +151,13 @@ function LayerRow({
 }
 export default function App() {
     const meta = useOceanMeta();
-
-    const bounds = meta.bounds ?? undefined;
+    // const bounds = meta.bounds ?? undefined;
     const [selected, setSelected] = useState(DEFAULT_LAYERS);
     const [opacities, setOpacities] = useState({});
     const [anomaly, setAnomaly] = useState(false);
     const [pickedMonth, setPickedMonth] = useState(null);
     const [showWeather, setShowWeather] = useState(false);
+    const [ensoEvent, setEnsoEvent] = useState(null);
     const selectedVariables = useMemo(
         () =>
             selected
@@ -167,11 +168,18 @@ export default function App() {
     const allMonths = useMonths(meta, selectedVariables);
 
     // sets most recent month as default
+    // handles el nino event selection
     const months = useMemo(() => {
+        if (ensoEvent) {
+            return allMonths.filter(
+                (m) => m >= ensoEvent.start && m <= ensoEvent.end,
+            );
+        }
         const firstRecent = meta.observedMonths?.at(-RECENT_MONTHS);
         const start = Math.max(0, allMonths.indexOf(firstRecent));
         return allMonths.slice(start);
-    }, [allMonths, meta.observedMonths]);
+    }, [allMonths, meta.observedMonths, ensoEvent]);
+
     const defaultMonth = meta.observedMonths?.at(-1) ?? months.at(-1) ?? null;
     const month = months.includes(pickedMonth) ? pickedMonth : defaultMonth;
 
@@ -194,6 +202,11 @@ export default function App() {
                 })),
         [selected, results, opacities], // eslint-disable-line react-hooks/exhaustive-deps
     );
+
+    const selectEnsoEvent = (ev) => {
+        setEnsoEvent(ev);
+        setPickedMonth(ev?.peakMonth ?? null); // null = back to the latest month
+    };
 
     const toggleLayer = (id, on) =>
         setSelected((prev) => {
@@ -294,7 +307,13 @@ export default function App() {
                                 </p>
                             )}
                         </div>
-
+                        <Separator />
+                        <ElNinoStats
+                            events={meta.elNinoEvents}
+                            selectedId={ensoEvent?.id ?? null}
+                            onSelect={selectEnsoEvent}
+                        />
+                        <Separator />
                         <Toggle
                             id="anomaly"
                             label="Show anomaly"
