@@ -38,6 +38,12 @@ export const getMetadata = () => get("/metadata", { cached: true });
 export const getElNino = () => get("/el-nino", { cached: true });
 export const getForecast = () => get("/forecast"); // re-read by the server every call
 export const getEvents = () => get("/events", { cached: true }); // El Niño history analysis
+// One event's effect at every point: field = onset | duration | strength
+export const getEventMap = (eventId, variable, field) =>
+    get(`/events/${eventId}/maps/${variable}/${field}`, { cached: true });
+// How consistently each point changed across past events: phase = el-nino | la-nina
+export const getTypicalMap = (phase, variable) =>
+    get(`/typical/${phase}/maps/${variable}`, { cached: true });
 
 // when: "YYYY-MM-DD" (daily data) or "YYYY-MM" (monthly data / forecast)
 export function getMap(variable, when, { anomaly = false, area } = {}) {

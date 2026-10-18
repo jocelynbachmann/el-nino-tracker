@@ -1,23 +1,27 @@
 /**
  * @file EventTimeline.jsx
- * @description History strip under the map: the ONI (El Niño index) month by month, with the
- * El Niño / La Niña events from the analysis on top. Click or drag anywhere to pick a time
- * (a day with daily data, a month with monthly data); click an event to select it.
+ * @description History strip under the map: the ONI (El Niño index) month by month, with each
+ * El Niño / La Niña period shaded behind it, and a row of region-wide unusual spells below.
+ * Drag to scrub the date. A click inside a shaded period selects that event (once it's selected,
+ * clicks inside it pick dates). Events can also be picked from the list in the Ocean data panel.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatTime, PHASE_NAME, VARIABLE_WORDS } from "@/lib/eventText";
+import MinimizeButton from "@/components/MinimizeButton";
+import { HistoryHelp } from "@/components/HelpText";
 
 const COLOURS = { el_nino: "#b2182b", la_nina: "#2166ac", neutral: "#a8a29e" };
 const SPELL_COLOURS = { above: "#d6604d", below: "#4393c3" }; // same ends as the anomaly map
-const H = 110; // svg height
+const H = 100; // svg height
 const PAD_X = 8;
-const EVENT_Y = 4;
-const EVENT_H = 18;
-const ZERO_Y = 50;
+const BAND_Y = 2; // event shading spans the ONI area
+const BAND_H = 62;
+const ZERO_Y = 33;
 const BAR_SCALE = 9; // px per ONI unit
-const SPELL_Y = 78; // region-wide unusual spells row
+const SPELL_Y = 72; // region-wide unusual spells row
 const SPELL_H = 12;
-const AXIS_Y = 106;
+const AXIS_Y = 97;
+const CLICK_PX = 4; // a press that moves less than this is a click, not a drag
 
 // "YYYY-MM" or "YYYY-MM-DD" -> ms (UTC). Months start on the 1st.
 const toMs = (s) => {
@@ -66,8 +70,10 @@ export default function EventTimeline({
 }) {
     const boxRef = useRef(null);
     const width = useWidth(boxRef);
-    const [hover, setHover] = useState(null);
-    const dragging = useRef(false);
+    const [hover, setHover] = useState(null); // time under the pointer
+    const [hoverSpell, setHoverSpell] = useState(null);
+    const [open, setOpen] = useState(true);
+    const press = useRef(null); // {x, moved}
 
     const ms = useMemo(() => times.map(toMs), [times]);
     const monthly = useMemo(
@@ -78,6 +84,10 @@ export default function EventTimeline({
         [enso],
     );
     const ensoByMonth = useMemo(() => new Map(monthly.map((e) => [e.month, e])), [monthly]);
+    const spans = useMemo(
+        () => events.map((ev) => ({ ev, a: toMs(ev.start), b: nextMonthMs(ev.end) })),
+        [events],
+    );
 
     const n = times.length;
     const t0 = ms[0];
@@ -86,7 +96,7 @@ export default function EventTimeline({
     const x = (v) => PAD_X + (inner * (v - t0)) / Math.max(1, t1 - t0);
     const inRange = (a, b) => b > t0 && a < t1;
 
-    // Consecutive months in the same phase (older events are drawn faded behind the analysed ones)
+    // Consecutive months in the same phase: shading for periods the analysis doesn't cover (pre-2002)
     const runs = useMemo(() => {
         const out = [];
         let cur = null;
@@ -101,11 +111,12 @@ export default function EventTimeline({
         return out;
     }, [monthly]);
 
-    const timeAt = (clientX) => {
+    const msAt = (clientX) => {
         const r = boxRef.current.getBoundingClientRect();
-        const v = t0 + ((clientX - r.left - PAD_X) / inner) * (t1 - t0);
-        return times[nearest(ms, v)];
+        return t0 + ((clientX - r.left - PAD_X) / inner) * (t1 - t0);
     };
+    const timeAt = (clientX) => times[nearest(ms, msAt(clientX))];
+    const eventAt = (v) => spans.find((s) => v >= s.a && v < s.b)?.ev ?? null;
 
     const years = useMemo(() => {
         if (!n) return [];
@@ -124,122 +135,118 @@ export default function EventTimeline({
     const spellText = (sp) =>
         `Whole region ${sp.direction === "above" ? words?.up : words?.down} than usual: ` +
         `${formatTime(sp.start)} to ${formatTime(sp.end)} (average ${sp.mean_sd > 0 ? "+" : ""}${sp.mean_sd} SD)`;
-    const [hoverSpell, setHoverSpell] = useState(null);
 
     const shown = hover ?? time;
     const info = shown ? ensoByMonth.get(shown.slice(0, 7)) : null;
+    const hoverEvent = hover ? eventAt(toMs(hover)) : null;
 
     if (!n) return null;
 
     return (
         <div className={`rounded-lg bg-background/90 p-3 shadow-md backdrop-blur ${className}`}>
-            <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs">
-                <div className="flex items-baseline gap-3">
+            <div className={`${open ? "mb-1" : ""} flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs`}>
+                <div className="flex items-center gap-3">
                     <h2 className="text-sm font-medium">El Niño history</h2>
+                    <HistoryHelp />
                     <span className="flex items-center gap-1 text-muted-foreground">
-                        <span className="inline-block size-2 rounded-full" style={{ background: COLOURS.el_nino }} />
+                        <span className="inline-block h-2.5 w-3 rounded-sm" style={{ background: COLOURS.el_nino, opacity: 0.35 }} />
                         El Niño
                     </span>
                     <span className="flex items-center gap-1 text-muted-foreground">
-                        <span className="inline-block size-2 rounded-full" style={{ background: COLOURS.la_nina }} />
+                        <span className="inline-block h-2.5 w-3 rounded-sm" style={{ background: COLOURS.la_nina, opacity: 0.35 }} />
                         La Niña
                     </span>
                 </div>
-                <span className="tabular-nums text-muted-foreground">
+                <span className="ml-auto tabular-nums text-muted-foreground">
                     {hoverSpell ? (
                         <span className="text-foreground">{spellText(hoverSpell)}</span>
-                    ) : shown && (
-                        <>
-                            <span className="text-foreground">{formatTime(shown)}</span>
-                            {info?.oni != null && ` · ONI ${info.oni > 0 ? "+" : ""}${Number(info.oni).toFixed(1)}`}
-                            {info?.phase && info.phase !== "neutral" && ` · ${PHASE_NAME[info.phase]}`}
-                        </>
+                    ) : (
+                        shown && (
+                            <>
+                                <span className="text-foreground">{formatTime(shown)}</span>
+                                {info?.oni != null && ` · ONI ${info.oni > 0 ? "+" : ""}${Number(info.oni).toFixed(1)}`}
+                                {hoverEvent
+                                    ? ` · ${hoverEvent.label.replace(" (ongoing)", "")} ${PHASE_NAME[hoverEvent.phase]}${
+                                          hoverEvent.id === selectedId ? "" : " (click to open)"
+                                      }`
+                                    : info?.phase && info.phase !== "neutral" && ` · ${PHASE_NAME[info.phase]}`}
+                            </>
+                        )
                     )}
                 </span>
+                <MinimizeButton open={open} onToggle={() => setOpen((o) => !o)} label="El Niño history" />
             </div>
 
-            <div ref={boxRef} className="w-full touch-none select-none">
+            <div ref={boxRef} className={`w-full touch-none select-none ${open ? "" : "hidden"}`}>
                 {width > 0 && (
                     <svg
                         width={width}
                         height={H}
                         role="img"
-                        aria-label="El Niño index by month with El Niño and La Niña events. Click to choose a date."
-                        className="cursor-crosshair"
+                        aria-label="El Niño index by month, with El Niño and La Niña periods shaded. Drag to choose a date; click a shaded period to open it."
+                        className={hoverEvent && hoverEvent.id !== selectedId ? "cursor-pointer" : "cursor-crosshair"}
                         onPointerDown={(e) => {
-                            dragging.current = true;
+                            press.current = { x: e.clientX, moved: false };
                             e.currentTarget.setPointerCapture(e.pointerId);
                             onTimeChange?.(timeAt(e.clientX));
                         }}
                         onPointerMove={(e) => {
                             const t = timeAt(e.clientX);
                             setHover(t);
-                            if (dragging.current) onTimeChange?.(t);
+                            const p = press.current;
+                            if (!p) return;
+                            if (Math.abs(e.clientX - p.x) >= CLICK_PX) p.moved = true;
+                            if (p.moved) onTimeChange?.(t);
                         }}
-                        onPointerUp={() => (dragging.current = false)}
+                        onPointerUp={(e) => {
+                            const p = press.current;
+                            press.current = null;
+                            if (!p || p.moved) return;
+                            // a click (not a drag) inside an event that isn't open yet opens it
+                            const ev = eventAt(msAt(e.clientX));
+                            if (ev && ev.id !== selectedId) onSelectEvent?.(ev.id);
+                        }}
                         onPointerLeave={() => setHover(null)}
                     >
-                        {/* all ENSO phases, faded (events before the analysis starts stay like this) */}
+                        {/* older ENSO periods (before the analysis starts): light, not clickable */}
                         {runs
-                            .filter((r) => inRange(r.start, r.end))
+                            .filter((r) => inRange(r.start, r.end) && !spans.some((s) => s.a < r.end && s.b > r.start))
                             .map((r) => (
                                 <rect
                                     key={`run-${r.start}`}
                                     x={x(Math.max(r.start, t0))}
-                                    y={EVENT_Y + 4}
-                                    width={Math.max(2, x(Math.min(r.end, t1)) - x(Math.max(r.start, t0)))}
-                                    height={EVENT_H - 8}
-                                    rx={2}
+                                    y={BAND_Y}
+                                    width={Math.max(1, x(Math.min(r.end, t1)) - x(Math.max(r.start, t0)))}
+                                    height={BAND_H}
                                     fill={COLOURS[r.phase]}
-                                    opacity={0.18}
+                                    opacity={0.06}
                                 />
                             ))}
 
-                        {/* analysed events: clickable */}
-                        {events.map((ev) => {
-                            const a = toMs(ev.start);
-                            const b = nextMonthMs(ev.end);
-                            if (!inRange(a, b)) return null;
-                            const xa = x(Math.max(a, t0));
-                            const w = Math.max(3, x(Math.min(b, t1)) - xa);
-                            const sel = ev.id === selectedId;
-                            const strong = Math.abs(ev.peak_oni) >= 1.5;
-                            return (
-                                <g
-                                    key={ev.id}
-                                    className="cursor-pointer"
-                                    onPointerDown={(e) => {
-                                        e.stopPropagation();
-                                        onSelectEvent?.(sel ? null : ev.id);
-                                    }}
-                                >
-                                    <title>{`${ev.label} ${PHASE_NAME[ev.phase]} (${ev.strength}), peak ONI ${ev.peak_oni > 0 ? "+" : ""}${ev.peak_oni}`}</title>
+                        {/* analysed El Niño / La Niña periods: shaded, click to open */}
+                        {spans
+                            .filter(({ a, b }) => inRange(a, b))
+                            .map(({ ev, a, b }) => {
+                                const xa = x(Math.max(a, t0));
+                                const w = Math.max(2, x(Math.min(b, t1)) - xa);
+                                const sel = ev.id === selectedId;
+                                const hov = hoverEvent?.id === ev.id;
+                                return (
                                     <rect
+                                        key={ev.id}
                                         x={xa}
-                                        y={EVENT_Y}
+                                        y={BAND_Y}
                                         width={w}
-                                        height={EVENT_H}
+                                        height={BAND_H}
                                         rx={3}
                                         fill={COLOURS[ev.phase]}
-                                        opacity={sel ? 1 : strong ? 0.8 : 0.5}
-                                        stroke={sel ? "var(--foreground)" : "none"}
-                                        strokeWidth={2}
+                                        opacity={sel ? 0.22 : hov ? 0.18 : 0.1}
+                                        stroke={sel ? COLOURS[ev.phase] : "none"}
+                                        strokeWidth={1.5}
+                                        strokeOpacity={1}
                                     />
-                                    {w > 40 && (
-                                        <text
-                                            x={xa + w / 2}
-                                            y={EVENT_Y + 13}
-                                            textAnchor="middle"
-                                            fontSize={11}
-                                            fill="#fff"
-                                            style={{ pointerEvents: "none" }}
-                                        >
-                                            {ev.label.replace(" (ongoing)", "")}
-                                        </text>
-                                    )}
-                                </g>
-                            );
-                        })}
+                                );
+                            })}
 
                         {/* ONI bars, one per month */}
                         <line x1={PAD_X} x2={width - PAD_X} y1={ZERO_Y} y2={ZERO_Y} stroke="var(--border)" />
@@ -258,6 +265,7 @@ export default function EventTimeline({
                                     height={Math.max(0.5, Math.abs(v) * BAR_SCALE)}
                                     fill={COLOURS[e.phase] ?? COLOURS.neutral}
                                     opacity={e.phase === "neutral" ? 0.45 : 0.85}
+                                    style={{ pointerEvents: "none" }}
                                 />
                             );
                         })}
@@ -266,15 +274,7 @@ export default function EventTimeline({
                         <text x={PAD_X} y={SPELL_Y - 3} fontSize={10} fill="var(--muted-foreground)">
                             {`Whole region: ${words?.label?.toLowerCase() ?? spellVariable}`}
                         </text>
-                        <rect
-                            x={PAD_X}
-                            y={SPELL_Y}
-                            width={inner}
-                            height={SPELL_H}
-                            rx={2}
-                            fill="var(--muted)"
-                            opacity={0.6}
-                        />
+                        <rect x={PAD_X} y={SPELL_Y} width={inner} height={SPELL_H} rx={2} fill="var(--muted)" opacity={0.6} />
                         {regionalSpells.map((sp) => {
                             const a = Math.max(toMs(sp.start), t0);
                             const b = Math.min(toMs(sp.end) + 86400000, t1);
@@ -314,7 +314,7 @@ export default function EventTimeline({
                         {/* current time */}
                         {time && (
                             <g style={{ pointerEvents: "none" }}>
-                                <line x1={x(toMs(time))} x2={x(toMs(time))} y1={EVENT_Y} y2={AXIS_Y - 11} stroke="var(--foreground)" strokeWidth={1.5} />
+                                <line x1={x(toMs(time))} x2={x(toMs(time))} y1={BAND_Y} y2={AXIS_Y - 11} stroke="var(--foreground)" strokeWidth={1.5} />
                                 <path d={`M${x(toMs(time)) - 4},${AXIS_Y - 11} h8 l-4,-5 z`} fill="var(--foreground)" />
                             </g>
                         )}

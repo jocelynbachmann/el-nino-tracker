@@ -17,6 +17,7 @@ Expected files (any missing optional file just disables that feature):
   wind_monthly.zarr, wind_climatology.zarr              optional - wind charts
   forecast_mld.json                                      optional - written by the model notebook
   analysis/events.json                                   optional - El Nino history (pipeline/analyze_events.py)
+  analysis/event_effects.zarr                            optional - per-event maps (start, duration, typical)
   ocean_daily.zarr, daily_normal.zarr, meta_daily.json   optional - daily maps (pipeline/build_daily_store.py);
                                                          when present the site works in days, not months
 """
@@ -122,6 +123,8 @@ class DataStore:
                           if _exists("wind_climatology.zarr") else None)
         self.reload_forecast()
         self.events = _read_json("analysis/events.json", None)   # El Nino history analysis
+        self.effects = (_open_zarr("analysis/event_effects.zarr").load()   # ~10 MB: per-event maps
+                        if _exists("analysis/event_effects.zarr") else None)
 
         # Daily maps (preferred when present). The normal is stored as coefficients and rebuilt per day,
         # exactly as in the El Nino analysis, so anomaly maps match it.
@@ -207,6 +210,42 @@ class DataStore:
             r = MODEL_REGION
             da = da.sel(latitude=slice(r["south"], r["north"]), longitude=slice(r["west"], r["east"]))
         return da.latitude.values, da.longitude.values, da.values, source
+
+    # ---------- El Nino analysis maps (pipeline/analyze_events.py) ----------
+    DAYS_PER_MONTH = 30.44
+
+    def effect_grid(self, event_id, slug, field):
+        """One event's effect at every point for one variable, or None.
+        field: onset (months after the event began, <0 = already under way), duration (months),
+        strength (peak, in SD of that point's own variability). Points with no clear change are NaN."""
+        ds = self.effects
+        if ds is None or event_id not in ds.event.values or slug not in ds.variable.values:
+            return None
+        sel = ds.sel(event=event_id, variable=slug)
+        if field == "onset":
+            v = sel["onset_days"].values / self.DAYS_PER_MONTH
+        elif field == "duration":
+            v = sel["duration_days"].values / self.DAYS_PER_MONTH
+        elif field == "strength":
+            v = sel["peak_z"].values
+        else:
+            return None
+        v = np.where(sel["detected"].values == 1, v, np.nan)
+        return ds.latitude.values, ds.longitude.values, v
+
+    def typical_grid(self, phase, slug):
+        """How consistently each point changed across all past events of a phase (el_nino / la_nina):
+        +1 = went up (warmer/saltier/higher/deeper) in every one, -1 = down in every one, 0 = no pattern."""
+        ds = self.effects
+        if ds is None or slug not in ds.variable.values or f"{phase}_mean_z" not in ds:
+            return None, 0
+        n = int(ds.attrs.get(f"n_{phase}", 0))
+        if n == 0:
+            return None, 0
+        sel = ds.sel(variable=slug)
+        mean_z = sel[f"{phase}_mean_z"].values
+        v = np.sign(mean_z) * sel[f"{phase}_n_same_sign"].values / n
+        return (ds.latitude.values, ds.longitude.values, v), n
 
     # ---------- daily maps ----------
     def daily_normal_map(self, var, day):

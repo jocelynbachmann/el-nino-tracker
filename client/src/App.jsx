@@ -6,6 +6,9 @@ import { useEffect, useMemo, useState } from "react";
 import WestCoastMap from "@/components/WestCoastMap";
 import EventTimeline from "@/components/EventTimeline";
 import EventCard from "@/components/EventCard";
+import MinimizeButton from "@/components/MinimizeButton";
+import { OceanPanelHelp } from "@/components/HelpText";
+import EventList from "@/components/EventList";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -13,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { useMonths, useOceanMeta, useOceanOverlays } from "@/hooks/useOcean";
 import { useEvents } from "@/hooks/useEvents";
+import { useAnalysisMap } from "@/hooks/useAnalysisMap";
 import { eventMapTime, formatTime, VARIABLE_WORDS } from "@/lib/eventText";
 import { cssGradient, getColourmap } from "@/lib/colourmap";
 import { PHASE_LABEL } from "@/lib/oceanApi";
@@ -173,6 +177,8 @@ export default function App() {
     const [pickedMonth, setPickedMonth] = useState(null);
     const [showWeather, setShowWeather] = useState(false);
     const [selectedEventId, setSelectedEventId] = useState(null);
+    const [mapMode, setMapMode] = useState("day"); // for a selected event: day | onset | duration | typical
+    const [panelOpen, setPanelOpen] = useState(true); // left "Ocean data" panel
     const selectedVariables = useMemo(
         () =>
             selected
@@ -226,17 +232,22 @@ export default function App() {
         }
     };
 
-    const overlays = useMemo(
-        () =>
-            selected
-                .filter((id) => results[id]?.overlay)
-                .map((id) => ({
-                    id,
-                    ...results[id].overlay,
-                    opacity: opacityOf(id) / 100,
-                })),
-        [selected, results, opacities], // eslint-disable-line react-hooks/exhaustive-deps
-    );
+    // Analysis maps for the selected event (start / duration / past events) replace the day's layers
+    const analysisMode = selectedEvent ? mapMode : "day";
+    const analysis = useAnalysisMap({ mode: analysisMode, event: selectedEvent, variable: spellVariable });
+
+    const overlays = useMemo(() => {
+        if (analysisMode !== "day") {
+            return analysis.overlay ? [{ id: "analysis", ...analysis.overlay, opacity: 0.9 }] : [];
+        }
+        return selected
+            .filter((id) => results[id]?.overlay)
+            .map((id) => ({
+                id,
+                ...results[id].overlay,
+                opacity: opacityOf(id) / 100,
+            }));
+    }, [selected, results, opacities, analysisMode, analysis.overlay]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const toggleLayer = (id, on) =>
         setSelected((prev) => {
@@ -262,16 +273,31 @@ export default function App() {
             />
 
             <div className="absolute left-4 top-4 z-10 max-h-[calc(100svh-2rem)] w-72 space-y-4 overflow-y-auto rounded-lg bg-background/90 p-4 shadow-md backdrop-blur">
-                <div className="flex items-baseline justify-between">
-                    <h2 className="text-sm font-medium">Ocean data</h2>
-                    {loading && (
-                        <span className="text-xs text-muted-foreground">
-                            Loading…
-                        </span>
-                    )}
+                <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                        <h2 className="text-sm font-medium">Ocean data</h2>
+                        <OceanPanelHelp />
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {loading && (
+                            <span className="text-xs text-muted-foreground">
+                                Loading…
+                            </span>
+                        )}
+                        {!panelOpen && month && (
+                            <span className="text-xs text-muted-foreground">
+                                {formatMonth(month)}
+                            </span>
+                        )}
+                        <MinimizeButton
+                            open={panelOpen}
+                            onToggle={() => setPanelOpen((o) => !o)}
+                            label="ocean data panel"
+                        />
+                    </div>
                 </div>
 
-                {meta.error ? (
+                {!panelOpen ? null : meta.error ? (
                     <p className="text-sm text-destructive">
                         Can't reach the ocean server.
                         <span className="mt-1 block text-xs text-muted-foreground">
@@ -338,6 +364,14 @@ export default function App() {
                                 </p>
                             )}
                         </div>
+
+                        <EventList
+                            events={history.events}
+                            selectedId={selectedEventId}
+                            onSelect={(id) => (id ? selectEvent(id) : setSelectedEventId(null))}
+                        />
+
+                        <Separator />
 
                         <Toggle
                             id="anomaly"
@@ -406,7 +440,14 @@ export default function App() {
                     peakTime={eventMonth}
                     mapTime={month}
                     onShowOnMap={setPickedMonth}
-                    onClose={() => setSelectedEventId(null)}
+                    onClose={() => {
+                        setSelectedEventId(null);
+                        setMapMode("day");
+                    }}
+                    mapMode={mapMode}
+                    onMapModeChange={setMapMode}
+                    analysisVariable={spellVariable}
+                    analysis={analysis}
                 />
             )}
 

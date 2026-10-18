@@ -17,6 +17,10 @@ Endpoints (all GET, all JSON):
     /forecast                                   mixed layer depth forecast (empty until the model runs)
     /events                                     past El Ninos / La Ninas and what each did here
                                                   (from pipeline/analyze_events.py)
+    /events/<event-id>/maps/<variable>/<field>  one event's effect at every point; field = onset
+                                                  (months after it began), duration (months), strength (SD)
+    /typical/<phase>/maps/<variable>            el-nino | la-nina: how consistently each point changed
+                                                  the same way across all past events (-1..1)
 
 Variables: temperature, salinity, sea-surface-height, mixed-layer-depth, current-east,
 current-north. /timeseries/region also takes wind-speed, wind-north, wind-east, wind-stress.
@@ -202,6 +206,58 @@ def events():
     if store.events is None:
         return error("No analysis/events.json yet - run pipeline/analyze_events.py", 404)
     resp = jsonify(store.events)
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
+
+
+# Colour ranges and colormap hints for the analysis maps (same JSON shape as /maps)
+ANALYSIS_FIELDS = {
+    "onset": {"label": "When the change started", "units": "months after the event began",
+              "color_range": [-6, 18], "colormap": "plasma"},
+    "duration": {"label": "How long it lasted", "units": "months", "color_range": [0, 30], "colormap": "ylgnbu"},
+    "strength": {"label": "How unusual it got", "units": "SD of that spot's normal variability",
+                 "color_range": [-4, 4], "colormap": "rdbu_r"},
+}
+ANALYSIS_VARIABLES = ("temperature", "salinity", "sea-surface-height", "mixed-layer-depth")
+
+
+def grid_json(lats, lons, values, **extra):
+    rows = np.round(np.asarray(values, dtype="float64"), 3)
+    return {**extra,
+            "latitudes": [round(float(x), 5) for x in lats],
+            "longitudes": [round(float(x), 5) for x in lons],
+            "values": [[None if np.isnan(v) else float(v) for v in row] for row in rows]}
+
+
+@app.get("/events/<event_id>/maps/<variable>/<field>")
+def event_map(event_id, variable, field):
+    if store.effects is None:
+        return error("No analysis/event_effects.zarr yet - run pipeline/analyze_events.py", 404)
+    if variable not in ANALYSIS_VARIABLES:
+        return error(f"Only {', '.join(ANALYSIS_VARIABLES)} were analysed", 404)
+    if field not in ANALYSIS_FIELDS:
+        return error(f"field must be one of {', '.join(ANALYSIS_FIELDS)}", 400)
+    out = store.effect_grid(event_id, variable, field)
+    if out is None:
+        return error(f"No event {event_id!r}", 404)
+    resp = jsonify(grid_json(*out, variable=variable, event=event_id, field=field, **ANALYSIS_FIELDS[field]))
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
+
+
+@app.get("/typical/<phase>/maps/<variable>")
+def typical_map(phase, variable):
+    phase_key = {"el-nino": "el_nino", "la-nina": "la_nina"}.get(phase)
+    if phase_key is None:
+        return error("phase must be el-nino or la-nina", 400)
+    if variable not in ANALYSIS_VARIABLES:
+        return error(f"Only {', '.join(ANALYSIS_VARIABLES)} were analysed", 404)
+    out, n = store.typical_grid(phase_key, variable)
+    if out is None:
+        return error("No analysis/event_effects.zarr yet - run pipeline/analyze_events.py", 404)
+    resp = jsonify(grid_json(*out, variable=variable, phase=phase, n_events=n,
+                             label=f"Same change in past {phase.replace('-', ' ')}s",
+                             units="share of past events", color_range=[-1, 1], colormap="rdbu_r"))
     resp.headers["Cache-Control"] = "public, max-age=3600"
     return resp
 

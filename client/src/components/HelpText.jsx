@@ -1,0 +1,98 @@
+/**
+ * @file HelpText.jsx
+ * @description The explanations shown by the "i" buttons, kept in one place so they're easy to edit.
+ */
+import InfoTip from "@/components/InfoTip";
+
+const Swatch = ({ colour }) => (
+    <span className="mr-1 inline-block size-2 translate-y-[-1px] rounded-full" style={{ background: colour }} />
+);
+
+export function OceanPanelHelp() {
+    return (
+        <InfoTip title="Ocean data">
+            <p>
+                <b>Date.</b> Drag the slider to choose a day (2002 to now). You can also click or drag on the El
+                Niño history strip at the bottom.
+            </p>
+            <p>
+                <b>Layers.</b> Tick a variable to colour the map with it. The last one you tick is drawn on top;
+                its slider sets how see-through it is.
+            </p>
+            <p>
+                <b>Past El Niños and La Niñas.</b> Click one to open a summary of what it did to our coast and
+                jump the map to when it hit hardest. Filter to just El Niños or La Niñas with the buttons.
+            </p>
+            <p>
+                <b>Show anomaly.</b> Instead of raw values, colours show how different each spot was from its own
+                normal for that time of year (2003–2022): <Swatch colour="#d6604d" />
+                above normal, <Swatch colour="#4393c3" />
+                below.
+            </p>
+            <p>Use the chevron to tuck this panel away.</p>
+        </InfoTip>
+    );
+}
+
+export function HistoryHelp() {
+    return (
+        <InfoTip title="El Niño history" side="top" width={340}>
+            <p>
+                <b>Shaded periods.</b> Each <Swatch colour="#b2182b" />
+                red or <Swatch colour="#2166ac" />
+                blue band is an El Niño or La Niña, by NOAA's definition (the ONI stays above +0.5 or below −0.5
+                for five overlapping seasons). <b>Click one</b> to see what it did to our coast, or pick it from
+                the list in the Ocean data panel. Very faint bands are before 2002, which the analysis doesn't
+                cover.
+            </p>
+            <p>
+                <b>Bars.</b> The ONI month by month: how much warmer or cooler than normal the tropical
+                Pacific was. This is what defines El Niño and La Niña.
+            </p>
+            <p>
+                <b>Whole region (bottom row).</b> When our whole area (46–52°N, off BC and Washington) ran unusually
+                high or low for the variable on top of the map, found automatically from the data. Hover for
+                dates, click to jump there. Compare it with the shaded periods: not every El Niño reaches us.
+            </p>
+            <p>
+                <b>Drag</b> along the strip to change the date on the map. Once an event is open, clicking
+                inside its period picks a date too.
+            </p>
+        </InfoTip>
+    );
+}
+
+export function EventHelp({ phaseName = "El Niño", plural = "El Niños" }) {
+    return (
+        <InfoTip title={`Reading this ${phaseName}`} align="end" width={330}>
+            <p>
+                <b>Each line</b> says what happened to that variable across our region during this {phaseName}.
+                A change only counts as clear when at least 20% of the region shifted the same way. Chance alone
+                gives about 10%, so smaller numbers are noise.
+            </p>
+            <p>
+                Every spot is compared only with <b>its own history</b> (its normal for that time of year,
+                2003–2022), so a small change at a usually calm spot can count as unusual.
+            </p>
+            <p>
+                <b>Map shows</b> (for the variable on top of the map):
+            </p>
+            <ul className="list-disc space-y-1 pl-4">
+                <li>
+                    <b>On the day</b>: the ocean on the chosen date.
+                </li>
+                <li>
+                    <b>Start</b>: when each spot's change began, compared with when {phaseName} began.
+                </li>
+                <li>
+                    <b>Duration</b>: how many months the change lasted at each spot.
+                </li>
+                <li>
+                    <b>Past {plural}</b>: whether each spot changed the same way in every past {phaseName}, or
+                    only sometimes.
+                </li>
+            </ul>
+            <p>Blank spots had no clear change.</p>
+        </InfoTip>
+    );
+}
