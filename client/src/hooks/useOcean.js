@@ -11,6 +11,7 @@ import {
     normalizeVariables,
     toBounds,
     toMonths,
+    toDays,
     toRange,
 } from "@/lib/oceanApi";
 import { buildLut, getColourmap } from "@/lib/colourmap";
@@ -35,6 +36,9 @@ export function useOceanMeta() {
                     error: null,
                     meta,
                     variables: normalizeVariables(meta).filter((v) => v.hasMap),
+                    // "day" once the daily store exists: maps are fetched per day, not per month
+                    timeStep: meta.time_step ?? "month",
+                    observedDays: toDays(meta.observed_days),
                     observedMonths: toMonths(meta.observed_months),
                     forecastMonths: toMonths(meta.forecast_months),
                     bounds: toBounds(meta.bounds, meta.grid),
@@ -64,10 +68,12 @@ export function useOceanMeta() {
     return state;
 }
 const imageCache = new Map();
+const MAX_CACHED_IMAGES = 400; // days add up quickly when scrubbing; drop the oldest
 
 function loadOverlay(variable, month, anomaly) {
     const key = `${variable.id}|${month}|${anomaly}`;
     if (imageCache.has(key)) return imageCache.get(key);
+    if (imageCache.size >= MAX_CACHED_IMAGES) imageCache.delete(imageCache.keys().next().value);
 
     const p = getMap(variable.id, month, { anomaly }).then((grid) => {
         const range =

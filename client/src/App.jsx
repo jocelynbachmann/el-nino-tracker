@@ -4,23 +4,41 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import WestCoastMap from "@/components/WestCoastMap";
+import EventTimeline from "@/components/EventTimeline";
+import EventCard from "@/components/EventCard";
+import MinimizeButton from "@/components/MinimizeButton";
+import { OceanPanelHelp } from "@/components/HelpText";
+import EventList from "@/components/EventList";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { useMonths, useOceanMeta, useOceanOverlays } from "@/hooks/useOcean";
+import { useEvents } from "@/hooks/useEvents";
+import { useAnalysisMap } from "@/hooks/useAnalysisMap";
+import { eventMapTime, formatTime, VARIABLE_WORDS } from "@/lib/eventText";
 import { cssGradient, getColourmap } from "@/lib/colourmap";
 import { PHASE_LABEL } from "@/lib/oceanApi";
 
 const DEFAULT_LAYERS = ["mixed-layer-depth"];
 const DEFAULT_OPACITY = 85;
-const RECENT_MONTHS = 6;
 
 const sliderValue = (v) => (Array.isArray(v) ? v[0] : v); // Radix passes arrays, Base UI may not
 
+// Waits until a value stops changing (e.g. while dragging the slider) before passing it on
+function useDebounced(value, ms) {
+    const [v, setV] = useState(value);
+    useEffect(() => {
+        const id = setTimeout(() => setV(value), ms);
+        return () => clearTimeout(id);
+    }, [value, ms]);
+    return v;
+}
+
 function formatMonth(m) {
     if (!m) return "";
+    if (m.length > 7) return formatTime(m); // a day: "15 Nov 2015"
     const [y, mo] = m.split("-").map(Number);
     return new Date(y, mo - 1).toLocaleString("en-CA", {
         month: "short",
@@ -124,7 +142,7 @@ function LayerRow({
 
                     {result?.error ? (
                         <p className="text-xs text-destructive">
-                            No data for this month
+                            No data for this date
                         </p>
                     ) : (
                         <div className="flex items-center gap-3">
@@ -150,6 +168,7 @@ function LayerRow({
 }
 export default function App() {
     const meta = useOceanMeta();
+    const history = useEvents();
 
     const bounds = meta.bounds ?? undefined;
     const [selected, setSelected] = useState(DEFAULT_LAYERS);
@@ -157,6 +176,9 @@ export default function App() {
     const [anomaly, setAnomaly] = useState(false);
     const [pickedMonth, setPickedMonth] = useState(null);
     const [showWeather, setShowWeather] = useState(false);
+    const [selectedEventId, setSelectedEventId] = useState(null);
+    const [mapMode, setMapMode] = useState("day"); // for a selected event: day | onset | duration | typical
+    const [panelOpen, setPanelOpen] = useState(true); // left "Ocean data" panel
     const selectedVariables = useMemo(
         () =>
             selected
@@ -166,34 +188,66 @@ export default function App() {
     );
     const allMonths = useMonths(meta, selectedVariables);
 
-    // sets most recent month as default
-    const months = useMemo(() => {
-        const firstRecent = meta.observedMonths?.at(-RECENT_MONTHS);
-        const start = Math.max(0, allMonths.indexOf(firstRecent));
-        return allMonths.slice(start);
-    }, [allMonths, meta.observedMonths]);
-    const defaultMonth = meta.observedMonths?.at(-1) ?? months.at(-1) ?? null;
-    const month = months.includes(pickedMonth) ? pickedMonth : defaultMonth;
+    // The whole record is available (the history timeline is for browsing past events), in days
+    // when the server has the daily data, otherwise in months. The latest one is the default.
+    // ("month" below holds whichever: "YYYY-MM-DD" or "YYYY-MM".)
+    const daily = meta.timeStep === "day" && meta.observedDays?.length > 0;
+    const months = daily ? meta.observedDays : allMonths;
+    const monthPos = useMemo(() => new Map(months.map((m, i) => [m, i])), [months]);
+    const defaultMonth = daily
+        ? months.at(-1)
+        : (meta.observedMonths?.at(-1) ?? months.at(-1) ?? null);
+    const month = monthPos.has(pickedMonth) ? pickedMonth : defaultMonth;
+    const mapMonth = useDebounced(month, 150); // don't fetch every day the slider passes over
 
     const results = useOceanOverlays({
         variables: selectedVariables,
-        month,
+        month: mapMonth,
         anomaly,
     });
 
     const opacityOf = (id) => opacities[id] ?? DEFAULT_OPACITY;
 
-    const overlays = useMemo(
-        () =>
-            selected
-                .filter((id) => results[id]?.overlay)
-                .map((id) => ({
-                    id,
-                    ...results[id].overlay,
-                    opacity: opacityOf(id) / 100,
-                })),
-        [selected, results, opacities], // eslint-disable-line react-hooks/exhaustive-deps
+    // The history strip's region-wide spells follow the top map layer (if it was analysed)
+    const spellVariable =
+        [...selected].reverse().find((id) => VARIABLE_WORDS[id]) ?? "temperature";
+
+    // El Niño history: selecting an event jumps to when it hit hardest here, as an anomaly map
+    const ensoList = useMemo(
+        () => Array.from(meta.elNinoByMonth?.values() ?? []),
+        [meta.elNinoByMonth],
     );
+    const selectedEvent = history.events.find((e) => e.id === selectedEventId) ?? null;
+    const clampMonth = (m) =>
+        monthPos.has(m) ? m : m > months.at(-1) ? months.at(-1) : months[0];
+    const eventMonth = selectedEvent
+        ? clampMonth(eventMapTime(selectedEvent, daily ? "day" : "month"))
+        : null;
+    const selectEvent = (id) => {
+        setSelectedEventId(id);
+        const ev = history.events.find((e) => e.id === id);
+        if (ev) {
+            setPickedMonth(clampMonth(eventMapTime(ev, daily ? "day" : "month")));
+            setAnomaly(true);
+        }
+    };
+
+    // Analysis maps for the selected event (start / duration / past events) replace the day's layers
+    const analysisMode = selectedEvent ? mapMode : "day";
+    const analysis = useAnalysisMap({ mode: analysisMode, event: selectedEvent, variable: spellVariable });
+
+    const overlays = useMemo(() => {
+        if (analysisMode !== "day") {
+            return analysis.overlay ? [{ id: "analysis", ...analysis.overlay, opacity: 0.9 }] : [];
+        }
+        return selected
+            .filter((id) => results[id]?.overlay)
+            .map((id) => ({
+                id,
+                ...results[id].overlay,
+                opacity: opacityOf(id) / 100,
+            }));
+    }, [selected, results, opacities, analysisMode, analysis.overlay]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const toggleLayer = (id, on) =>
         setSelected((prev) => {
@@ -201,10 +255,10 @@ export default function App() {
             return on ? [...rest, id] : rest; // newly checked layers go on top
         });
 
-    const monthIndex = Math.max(0, months.indexOf(month));
+    const monthIndex = monthPos.get(month) ?? 0;
     const isForecast =
-        month && meta.observedMonths && !meta.observedMonths.includes(month);
-    const enso = meta.elNinoByMonth?.get(month);
+        !daily && month && meta.observedMonths && !meta.observedMonths.includes(month);
+    const enso = meta.elNinoByMonth?.get(month?.slice(0, 7));
     const forecast = isForecast ? meta.forecastByMonth?.get(month) : null;
     const loading =
         meta.loading || Object.values(results).some((r) => r.loading);
@@ -219,16 +273,31 @@ export default function App() {
             />
 
             <div className="absolute left-4 top-4 z-10 max-h-[calc(100svh-2rem)] w-72 space-y-4 overflow-y-auto rounded-lg bg-background/90 p-4 shadow-md backdrop-blur">
-                <div className="flex items-baseline justify-between">
-                    <h2 className="text-sm font-medium">Ocean data</h2>
-                    {loading && (
-                        <span className="text-xs text-muted-foreground">
-                            Loading…
-                        </span>
-                    )}
+                <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                        <h2 className="text-sm font-medium">Ocean data</h2>
+                        <OceanPanelHelp />
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {loading && (
+                            <span className="text-xs text-muted-foreground">
+                                Loading…
+                            </span>
+                        )}
+                        {!panelOpen && month && (
+                            <span className="text-xs text-muted-foreground">
+                                {formatMonth(month)}
+                            </span>
+                        )}
+                        <MinimizeButton
+                            open={panelOpen}
+                            onToggle={() => setPanelOpen((o) => !o)}
+                            label="ocean data panel"
+                        />
+                    </div>
                 </div>
 
-                {meta.error ? (
+                {!panelOpen ? null : meta.error ? (
                     <p className="text-sm text-destructive">
                         Can't reach the ocean server.
                         <span className="mt-1 block text-xs text-muted-foreground">
@@ -258,7 +327,7 @@ export default function App() {
                                 max={Math.max(0, months.length - 1)}
                                 step={1}
                                 disabled={months.length < 2}
-                                aria-label="Month"
+                                aria-label={daily ? "Date" : "Month"}
                             />
                             <div className="flex justify-between text-xs text-muted-foreground">
                                 <span>{formatMonth(months[0])}</span>
@@ -296,10 +365,22 @@ export default function App() {
                             )}
                         </div>
 
+                        <EventList
+                            events={history.events}
+                            selectedId={selectedEventId}
+                            onSelect={(id) => (id ? selectEvent(id) : setSelectedEventId(null))}
+                        />
+
+                        <Separator />
+
                         <Toggle
                             id="anomaly"
                             label="Show anomaly"
-                            hint="Difference from the normal for that month"
+                            hint={
+                                daily
+                                    ? "Difference from each spot's normal for that time of year"
+                                    : "Difference from the normal for that month"
+                            }
                             checked={anomaly}
                             onChange={setAnomaly}
                         />
@@ -351,6 +432,39 @@ export default function App() {
 
                   */}
             </div>
+
+            {selectedEvent && (
+                <EventCard
+                    className="absolute right-4 top-4 z-10 max-h-[calc(100svh-10rem)] w-80 overflow-y-auto"
+                    event={selectedEvent}
+                    peakTime={eventMonth}
+                    mapTime={month}
+                    onShowOnMap={setPickedMonth}
+                    onClose={() => {
+                        setSelectedEventId(null);
+                        setMapMode("day");
+                    }}
+                    mapMode={mapMode}
+                    onMapModeChange={setMapMode}
+                    analysisVariable={spellVariable}
+                    analysis={analysis}
+                />
+            )}
+
+            {!meta.error && months.length > 0 && (
+                <EventTimeline
+                    className="absolute bottom-4 left-80 right-4 z-10"
+                    enso={ensoList}
+                    events={history.events}
+                    times={months}
+                    time={month}
+                    onTimeChange={setPickedMonth}
+                    selectedId={selectedEventId}
+                    onSelectEvent={selectEvent}
+                    spellVariable={spellVariable}
+                    regionalSpells={history.regionalSpells?.[spellVariable] ?? []}
+                />
+            )}
         </div>
     );
 }

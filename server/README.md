@@ -36,7 +36,7 @@ Base URL when running locally: `http://localhost:5001`
 | `GET /maps/<variable>/<YYYY-MM>` | One month's map: `latitudes` (south→north), `longitudes` (west→east), `values[row][col]` (`null` = land), `source` (`observed`/`forecast`), `color_range`. Options: `?anomaly=true` (difference from normal), `?area=model-region` (crop to 46–52°N, 134–120°W) |
 | `GET /timeseries/location?lat=48.5&lon=-126&variable=mixed-layer-depth` | Monthly series at the nearest grid cell: `[{month, value, anomaly}]`, plus `is_ocean` |
 | `GET /timeseries/region/<variable>` | Same, averaged over the model region. Also accepts the wind variables |
-| `GET /forecast` | Contents of `forecast_mld.json`, plus `normal_by_calendar_month` (regional MLD normal, Jan–Dec) |
+| `GET /forecast` | Contents of `forecast_mld.json`: per month `mld`, `mld_anomaly`, `normal`, `lower`/`upper`, `source` |
 
 Variables: `temperature`, `salinity`, `sea-surface-height`, `mixed-layer-depth`,
 `current-east`, `current-north`. Regional time series also: `wind-speed`, `wind-north`,

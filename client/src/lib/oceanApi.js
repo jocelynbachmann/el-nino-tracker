@@ -5,6 +5,7 @@
 // "/ocean" is proxied to http://localhost:5001 in vite.config.js
 const BASE = import.meta.env?.VITE_OCEAN_API ?? "/ocean";
 const cache = new Map(); // caching so going back to a month is instant
+const EVENTS_SINCE = "2005-01";
 
 function get(path, { cached = false } = {}) {
     const url = BASE + path;
@@ -36,13 +37,21 @@ export const getHealth = () => get("/health");
 export const getMetadata = () => get("/metadata", { cached: true });
 export const getElNino = () => get("/el-nino", { cached: true });
 export const getForecast = () => get("/forecast"); // re-read by the server every call
+export const getEvents = () => get("/events", { cached: true }); // El Niño history analysis
+// One event's effect at every point: field = onset | duration | strength
+export const getEventMap = (eventId, variable, field) =>
+    get(`/events/${eventId}/maps/${variable}/${field}`, { cached: true });
+// How consistently each point changed across past events: phase = el-nino | la-nina
+export const getTypicalMap = (phase, variable) =>
+    get(`/typical/${phase}/maps/${variable}`, { cached: true });
 
-export function getMap(variable, month, { anomaly = false, area } = {}) {
+// when: "YYYY-MM-DD" (daily data) or "YYYY-MM" (monthly data / forecast)
+export function getMap(variable, when, { anomaly = false, area } = {}) {
     const params = new URLSearchParams();
     if (anomaly) params.set("anomaly", "true");
     if (area) params.set("area", area);
     const qs = params.toString();
-    return get(`/maps/${variable}/${month}${qs ? `?${qs}` : ""}`, {
+    return get(`/maps/${variable}/${when}${qs ? `?${qs}` : ""}`, {
         cached: true,
     });
 }
@@ -99,6 +108,19 @@ function expandRange(start, end) {
     return out;
 }
 
+// {start: "2002-01-01", end: "2026-10-11"} -> every day in between, as "YYYY-MM-DD"
+export function toDays(value) {
+    if (!value?.start || !value?.end) return [];
+    const out = [];
+    const d = new Date(`${value.start}T00:00:00Z`);
+    const end = new Date(`${value.end}T00:00:00Z`);
+    while (d <= end) {
+        out.push(d.toISOString().slice(0, 10));
+        d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return out;
+}
+
 export function toMonths(value) {
     if (!value) return [];
     if (Array.isArray(value)) {
@@ -147,6 +169,49 @@ export function toBounds(b, grid) {
     }
     return null;
 }
+
+// El Niño Events that have map data, each with its peak (highest ONI) month
+// ONI: oceanic nino index - 3 month rolling average used to classifi nino, nina cycles
+export function toElNinoEvents(elNinoByMonth, observedMonths) {
+    if (!elNinoByMonth || !observedMonths) return [];
+    const events = [];
+    let current = null;
+
+    for (const month of observedMonths) {
+        const e = elNinoByMonth.get(month);
+        if (e?.phase !== "el_nino") {
+            current = null; // any other month (or a gap) ends the event
+            continue;
+        }
+        const oni = e.oni != null ? Number(e.oni) : null;
+        if (!current) {
+            current = {
+                id: month,
+                start: month,
+                end: month,
+                peakMonth: month,
+                peakOni: oni,
+            };
+            events.push(current);
+        } else {
+            current.end = month;
+            if (
+                oni != null &&
+                    (current.peakOni == null || oni > current.peakOni)
+            ) {
+                current.peakMonth = month;
+                current.peakOni = oni;
+            }
+        }
+    }
+
+    for (const ev of events) {
+        const y0 = ev.start.slice(0, 4);
+        const y1 = ev.end.slice(0, 4);
+        ev.label = y0 === y1 ? y0 : `${y0}–${y1.slice(2)}`;
+    }
+    return events.filter((ev) => ev.start >= EVENTS_SINCE);
+} // toElNinoYears
 
 export const PHASE_LABEL = {
     el_nino: "El Niño",
