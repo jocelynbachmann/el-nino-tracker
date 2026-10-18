@@ -14,7 +14,12 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
-import { useMonths, useOceanMeta, useOceanOverlays } from "@/hooks/useOcean";
+import {
+    useForecastOverlay,
+    useMonths,
+    useOceanMeta,
+    useOceanOverlays,
+} from "@/hooks/useOcean";
 import { useEvents } from "@/hooks/useEvents";
 import { useAnalysisMap } from "@/hooks/useAnalysisMap";
 import { eventMapTime, formatTime, VARIABLE_WORDS } from "@/lib/eventText";
@@ -170,6 +175,94 @@ function LayerRow({
         </div>
     );
 }
+
+// Per-point model forecast of MLD, with its own month picker (independent of the date slider)
+function ForecastLayerRow({
+    info,
+    variable,
+    checked,
+    onCheckedChange,
+    month,
+    onMonthChange,
+    opacity,
+    onOpacityChange,
+    result,
+    anomaly,
+}) {
+    const gradient = cssGradient(getColourmap(variable?.colormap, { anomaly }));
+
+    return (
+        <div
+            className={`rounded-md px-2 py-1.5 transition-colors ${checked ? "bg-accent" : "hover:bg-accent/60"}`}
+        >
+            <Label
+                htmlFor="layer-mld-forecast"
+                className="flex cursor-pointer items-center gap-3 font-normal"
+            >
+                <Checkbox
+                    id="layer-mld-forecast"
+                    checked={checked}
+                    onCheckedChange={(c) => onCheckedChange(c === true)}
+                />
+                <span className="flex-1 truncate">MLD forecast (model)</span>
+                {result?.loading && (
+                    <span className="text-xs text-muted-foreground">…</span>
+                )}
+            </Label>
+
+            {checked && (
+                <div className="mt-2 space-y-2 pl-7">
+                    <select
+                        value={month}
+                        onChange={(e) => onMonthChange(e.target.value)}
+                        aria-label="Forecast month"
+                        className="w-full rounded-md border bg-background px-2 py-1 text-sm"
+                    >
+                        {info.months.map((m) => (
+                            <option key={m} value={m}>
+                                {formatMonth(m)}
+                            </option>
+                        ))}
+                    </select>
+                    <div
+                        className="h-2 w-full rounded-sm"
+                        style={{ background: gradient, opacity: opacity / 100 }}
+                    />
+                    <LegendScale
+                        range={result?.range}
+                        units={variable?.units}
+                        anomaly={anomaly}
+                    />
+                    {result?.error ? (
+                        <p className="text-xs text-destructive">
+                            No forecast for this month
+                        </p>
+                    ) : (
+                        <div className="flex items-center gap-3">
+                            <Slider
+                                value={[opacity]}
+                                onValueChange={(v) =>
+                                    onOpacityChange(sliderValue(v))
+                                }
+                                min={10}
+                                max={100}
+                                step={5}
+                                aria-label="MLD forecast opacity"
+                            />
+                            <span className="w-9 text-right text-xs tabular-nums text-muted-foreground">
+                                {opacity}%
+                            </span>
+                        </div>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                        SEAS5 run of {info.issued?.slice(0, 7)}, ensemble mean
+                    </p>
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function App() {
     const meta = useOceanMeta();
     const history = useEvents();
@@ -226,6 +319,19 @@ export default function App() {
 
     const opacityOf = (id) => opacities[id] ?? DEFAULT_OPACITY;
 
+    // Per-point MLD forecast layer: drawn on top of the other layers, for its own month
+    const forecastGrid = meta.forecastGrid;
+    const [showForecast, setShowForecast] = useState(false);
+    const [pickedForecastMonth, setPickedForecastMonth] = useState(null);
+    const forecastMonth = forecastGrid?.months.includes(pickedForecastMonth)
+        ? pickedForecastMonth
+        : (forecastGrid?.months[0] ?? null);
+    const forecastResult = useForecastOverlay({
+        month: showForecast ? forecastMonth : null,
+        anomaly,
+        variable: meta.variables?.find((v) => v.id === "mixed-layer-depth"),
+    });
+
     // The history strip's region-wide spells follow the top map layer (if it was analysed)
     const spellVariable =
         [...selected].reverse().find((id) => VARIABLE_WORDS[id]) ??
@@ -264,14 +370,22 @@ export default function App() {
 
     const overlays = useMemo(() => {
         if (analysisMode !== "day") return analysis.overlays ?? [];
-        return selected
+        const layers = selected
             .filter((id) => results[id]?.overlay)
             .map((id) => ({
                 id,
                 ...results[id].overlay,
                 opacity: opacityOf(id) / 100,
             }));
-    }, [selected, results, opacities, analysisMode, analysis.overlays]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (showForecast && forecastResult.overlay) {
+            layers.push({
+                id: "mld-forecast",
+                ...forecastResult.overlay,
+                opacity: opacityOf("mld-forecast") / 100,
+            });
+        }
+        return layers;
+    }, [selected, results, opacities, analysisMode, analysis.overlays, showForecast, forecastResult.overlay]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const toggleLayer = (id, on) =>
         setSelected((prev) => {
@@ -443,6 +557,27 @@ export default function App() {
                                     }
                                 />
                             ))}
+                            {forecastGrid && (
+                                <ForecastLayerRow
+                                    info={forecastGrid}
+                                    variable={meta.variables?.find(
+                                        (v) => v.id === "mixed-layer-depth",
+                                    )}
+                                    checked={showForecast}
+                                    onCheckedChange={setShowForecast}
+                                    month={forecastMonth}
+                                    onMonthChange={setPickedForecastMonth}
+                                    opacity={opacityOf("mld-forecast")}
+                                    onOpacityChange={(o) =>
+                                        setOpacities((prev) => ({
+                                            ...prev,
+                                            "mld-forecast": o,
+                                        }))
+                                    }
+                                    result={forecastResult}
+                                    anomaly={anomaly}
+                                />
+                            )}
                         </div>
 
                         <Separator />

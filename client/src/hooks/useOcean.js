@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
     getElNino,
     getForecast,
+    getForecastMap,
     getMap,
     getMetadata,
     normalizeVariables,
@@ -53,6 +54,10 @@ export function useOceanMeta() {
                     ),
                     forecastInfo: forecast
                         ? { issued: forecast.issued, model: forecast.model }
+                        : null,
+                    // Per-point MLD forecast maps: { issued, model, band, months: ["2026-10", ...] }
+                    forecastGrid: forecast?.grid?.months?.length
+                        ? forecast.grid
                         : null,
                 });
             })
@@ -146,6 +151,47 @@ export function useOceanOverlays({ variables, month, anomaly }) {
     }, [ids, month, anomaly]); // eslint-disable-line react-hooks/exhaustive-deps
 
     return results;
+}
+
+// Per-point MLD forecast for one month, coloured like the observed MLD layer (`variable`).
+// Returns { overlay, range, loading, error }; empty when month is null (layer off).
+export function useForecastOverlay({ month, anomaly, variable }) {
+    const [state, setState] = useState({});
+
+    useEffect(() => {
+        if (!month) {
+            setState({});
+            return;
+        }
+        let cancelled = false;
+        setState((s) => ({ ...s, loading: true, error: null }));
+
+        const key = `forecast|${month}|${anomaly}`;
+        if (!imageCache.has(key)) {
+            const p = getForecastMap(month, { anomaly }).then((grid) => {
+                const lut = buildLut(
+                    getColourmap(grid.colormap ?? variable?.colormap, { anomaly }),
+                );
+                const img = gridToImage(grid, lut, toRange(grid.color_range));
+                return {
+                    overlay: { url: img.url, coordinates: img.coordinates },
+                    range: img.range,
+                };
+            });
+            imageCache.set(key, p);
+            p.catch(() => imageCache.delete(key));
+        }
+        imageCache
+            .get(key)
+            .then((r) => !cancelled && setState({ ...r, loading: false, error: null }))
+            .catch((err) => !cancelled && setState({ loading: false, error: err }));
+
+        return () => {
+            cancelled = true;
+        };
+    }, [month, anomaly]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    return state;
 }
 
 // Observed months, plus forecast months if any selected variable has them

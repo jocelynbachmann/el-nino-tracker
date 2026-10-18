@@ -14,7 +14,10 @@ Endpoints (all GET, all JSON):
                                                   ?area=model-region     crop to 46-52N, 134-120W
     /timeseries/location?lat=..&lon=..&variable=..   monthly series at the nearest grid cell
     /timeseries/region/<variable>               monthly series averaged over the model region
-    /forecast                                   mixed layer depth forecast (empty until the model runs)
+    /forecast                                   mixed layer depth forecast (empty until the model runs);
+                                                  "grid" lists the months with per-point maps
+    /forecast/maps/<YYYY-MM>                    per-point MLD forecast map (model/train copy.py on SEAS5)
+                                                  ?anomaly=true          difference from normal
     /events                                     past El Ninos / La Ninas and what each did here
                                                   (from pipeline/analyze_events.py)
     /events/<event-id>/maps/<variable>/<field>  one event's effect at every point; field = onset
@@ -267,8 +270,34 @@ def forecast():
     store.reload_forecast()                    # pick up a new model run without restarting
     map_payload.cache_clear()
     fc = store.forecast or {"months": []}
+    fg = store.forecast_grid
+    grid = ({"issued": fg.get("issued"), "model": fg.get("model"), "inputs": fg.get("inputs"),
+             "band": fg.get("band"), "months": list(store.forecast_grid_by_month)} if fg else None)
     # Each month already carries its own "normal" (same 1993-2018 baseline as every other endpoint)
-    return jsonify({**fc, "variable": "mixed-layer-depth", "region": MODEL_REGION})
+    return jsonify({**fc, "variable": "mixed-layer-depth", "region": MODEL_REGION, "grid": grid})
+
+
+@app.get("/forecast/maps/<month>")
+def forecast_map(month):
+    """Per-point MLD forecast for one month (model/train copy.py on SEAS5), same shape as /maps.
+    ?anomaly=true gives the difference from each point's normal."""
+    if not MONTH_RE.match(month):
+        return error("Use a month like 2027-01", 400)
+    anomaly = flag("anomaly")
+    out = store.forecast_grid_map(month, anomaly)
+    if out is None:
+        months = ", ".join(store.forecast_grid_by_month) or "none - run model/train copy.py"
+        return error(f"No per-point MLD forecast for {month}. Available: {months}", 404)
+    lats, lons, values, lower, upper = out
+    vm = store.var_meta("mlotst", store.daily is not None)     # same colours as the observed MLD layer
+    clean = lambda a: grid_json(lats, lons, a)["values"]
+    fg = store.forecast_grid
+    return jsonify(grid_json(lats, lons, values,
+                             variable="mixed-layer-depth", label="Mixed layer depth forecast",
+                             units=vm["units"], month=month, anomaly=anomaly, source="forecast",
+                             issued=fg.get("issued"), model=fg.get("model"), band=fg.get("band"),
+                             color_range=vm["anomaly_range"] if anomaly else vm["range"],
+                             colormap=vm["cmap"]) | {"lower": clean(lower), "upper": clean(upper)})
 
 
 if __name__ == "__main__":

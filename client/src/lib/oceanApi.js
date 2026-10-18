@@ -56,6 +56,12 @@ export function getMap(variable, when, { anomaly = false, area } = {}) {
     });
 }
 
+// Per-point MLD forecast for one month ("YYYY-MM"), same shape as getMap
+export const getForecastMap = (month, { anomaly = false } = {}) =>
+    get(`/forecast/maps/${month}${anomaly ? "?anomaly=true" : ""}`, {
+        cached: true,
+    });
+
 export function getLocationSeries(lat, lon, variable) {
     const params = new URLSearchParams({ lat, lon, variable });
     return get(`/timeseries/location?${params}`, { cached: true });

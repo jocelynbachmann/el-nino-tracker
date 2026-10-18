@@ -26,6 +26,7 @@ import os
 import threading
 from collections import OrderedDict
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -34,6 +35,8 @@ import xarray as xr
 DEFAULT_DATA = "s3://ocean-hackathon-2026/teams/team-elnino/processed"
 DATA_DIR = os.environ.get("ELNINO_DATA", DEFAULT_DATA).rstrip("/")
 IS_S3 = DATA_DIR.startswith("s3://")
+# Written by model/train copy.py next to the SEAS5 input; used when the data folder has no copy
+LOCAL_FORECAST_GRID = Path(__file__).resolve().parent.parent / "future" / "clean" / "forecast_mld_grid.json"
 
 # The box the MLD model is trained on; region time series and forecasts refer to this.
 MODEL_REGION = {"south": 46.0, "north": 52.0, "west": -134.0, "east": -120.0}
@@ -157,6 +160,27 @@ class DataStore:
                      "lower": 35.0, "upper": 49.0, "source": "model" | "climatology"}]}"""
         self.forecast = _read_json("forecast_mld.json", None)
         self.forecast_by_month = {m["month"]: m for m in (self.forecast or {}).get("months", [])}
+        # Per-point forecast maps from model/train copy.py (SEAS5 grid): forecast_mld_grid.json
+        # Falls back to the local copy the model writes, so it can be tried before uploading.
+        self.forecast_grid = _read_json("forecast_mld_grid.json", None)
+        if self.forecast_grid is None and LOCAL_FORECAST_GRID.exists():
+            with open(LOCAL_FORECAST_GRID) as f:
+                self.forecast_grid = json.load(f)
+        self.forecast_grid_by_month = {m["month"]: m for m in (self.forecast_grid or {}).get("months", [])}
+
+    def forecast_grid_map(self, month, anomaly=False):
+        """One month of the per-point MLD forecast as (lats, lons, values, lower, upper), or None.
+        anomaly=True gives forecast minus that point's normal (the band is shifted the same way)."""
+        m = self.forecast_grid_by_month.get(month)
+        if m is None:
+            return None
+        arr = lambda k: np.array(m[k], dtype="float64")       # None -> NaN
+        values, lower, upper = arr("mld"), arr("lower"), arr("upper")
+        if anomaly:
+            normal = arr("normal")
+            values, lower, upper = values - normal, lower - normal, upper - normal
+        fg = self.forecast_grid
+        return fg["latitudes"], fg["longitudes"], values, lower, upper
 
     # ---------- helpers ----------
     def resolve_var(self, name, include_wind=False):
