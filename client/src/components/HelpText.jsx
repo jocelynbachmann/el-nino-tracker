@@ -3,6 +3,7 @@
  * @description The explanations shown by the "i" buttons, kept in one place so they're easy to edit.
  */
 import InfoTip from "@/components/InfoTip";
+import { formatTime } from "@/lib/eventText";
 
 const Swatch = ({ colour }) => (
     <span className="mr-1 inline-block size-2 translate-y-[-1px] rounded-full" style={{ background: colour }} />
@@ -57,6 +58,29 @@ export function HistoryHelp() {
             <p>
                 <b>Drag</b> along the strip to change the date on the map. Once an event is open, clicking
                 inside its period picks a date too.
+            </p>
+        </InfoTip>
+    );
+}
+
+// The "Predictions" switch on the history strip
+export function PredictionsHelp({ from, until, issued }) {
+    return (
+        <InfoTip title="Predictions" width={320}>
+            <p>
+                Extends the date slider and the El Niño history strip past the last observation,{" "}
+                {from ? `from ${formatTime(from)} ` : ""}to {until ? formatTime(until) : "the end of the forecast"}.
+                On the strip, predicted dates are striped amber.
+            </p>
+            <p>
+                <b>Mixed layer depth only.</b> That's the one variable our model predicts, so past the last
+                observation the other layers switch off and come back when you go back in time.
+            </p>
+            <p>
+                The model turns the ECMWF SEAS5 seasonal forecast{issued ? ` (issued ${formatTime(issued)})` : ""}{" "}
+                and the El Niño index into a mixed layer depth for each spot, one value per month (the average
+                of 51 forecast runs). Every day in a month shows that month's prediction. It's experimental:
+                treat it as a rough guide.
             </p>
         </InfoTip>
     );

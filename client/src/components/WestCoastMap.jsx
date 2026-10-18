@@ -138,10 +138,13 @@ function addHerringLayer(map) {
                 150,
                 28,
             ],
-            "circle-color": "#7c3aed",
-            "circle-opacity": 0.6,
+            // Soft magenta with a white ring: a colour no data layer uses, so it stands out on every
+            // colour scale and the dark basemap without being mistaken for red/blue anomalies
+            // or the amber predictions
+            "circle-color": "#db5fa3",
+            "circle-opacity": 0.85,
             "circle-stroke-color": "#ffffff",
-            "circle-stroke-width": 1,
+            "circle-stroke-width": 1.5,
         },
     });
 

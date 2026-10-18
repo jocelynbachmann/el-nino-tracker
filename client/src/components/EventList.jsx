@@ -15,7 +15,7 @@ const FILTERS = [
 ];
 
 export default function EventList({ events = [], selectedId, onSelect }) {
-    const [open, setOpen] = useState(true);
+    const [open, setOpen] = useState(false); // starts collapsed; the history strip is the main way in
     const [filter, setFilter] = useState("all");
     const shown = useMemo(
         () => [...events].reverse().filter((e) => filter === "all" || e.phase === filter), // newest first

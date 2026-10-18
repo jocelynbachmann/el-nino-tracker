@@ -7,7 +7,7 @@ import WestCoastMap from "@/components/WestCoastMap";
 import EventTimeline from "@/components/EventTimeline";
 import EventCard from "@/components/EventCard";
 import MinimizeButton from "@/components/MinimizeButton";
-import { OceanPanelHelp, VariableInfo } from "@/components/HelpText";
+import { OceanPanelHelp, PredictionsHelp, VariableInfo } from "@/components/HelpText";
 import EventList from "@/components/EventList";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -105,26 +105,39 @@ function LayerRow({
     result,
     anomaly,
     onTop,
+    disabled = false, // past the last observation: no prediction for this variable
+    prediction = null, // { month, issued }: showing the model's prediction instead of observations
 }) {
     const id = `layer-${variable.id}`;
     const gradient = cssGradient(getColourmap(variable.colormap, { anomaly }));
 
     return (
         <div
-            className={`rounded-md px-2 py-1.5 transition-colors ${checked ? "bg-accent" : "hover:bg-accent/60"}`}
+            className={`rounded-md px-2 py-1.5 transition-colors ${checked ? "bg-accent" : disabled ? "opacity-50" : "hover:bg-accent/60"}`}
         >
             <div className="flex items-center gap-1.5">
                 <Label
                     htmlFor={id}
-                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-3 font-normal"
+                    className={`flex min-w-0 flex-1 items-center gap-3 font-normal ${disabled || prediction ? "cursor-default" : "cursor-pointer"}`}
                 >
                     <Checkbox
                         id={id}
                         checked={checked}
+                        disabled={disabled || !!prediction}
                         onCheckedChange={(c) => onCheckedChange(c === true)}
                     />
                     <span className="flex-1 truncate">{variable.label}</span>
-                    {checked && onTop && (
+                    {prediction && (
+                        <span className="rounded-full bg-amber-500/15 px-1.5 text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                            predicted
+                        </span>
+                    )}
+                    {disabled && (
+                        <span className="text-[10px] text-muted-foreground">
+                            no prediction
+                        </span>
+                    )}
+                    {checked && onTop && !prediction && (
                         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
                             top
                         </span>
@@ -151,7 +164,9 @@ function LayerRow({
 
                     {result?.error ? (
                         <p className="text-xs text-destructive">
-                            No data for this date
+                            {prediction
+                                ? "No prediction for this month"
+                                : "No data for this date"}
                         </p>
                     ) : (
                         <div className="flex items-center gap-3">
@@ -170,97 +185,38 @@ function LayerRow({
                             </span>
                         </div>
                     )}
+                    {prediction && (
+                        <p className="text-xs text-muted-foreground">
+                            Model prediction for {formatMonth(prediction.month)}{" "}
+                            (monthly average), from the SEAS5 seasonal forecast
+                            of {formatMonth(prediction.issued?.slice(0, 7))}.
+                            Rough: treat as a guide.
+                        </p>
+                    )}
                 </div>
             )}
         </div>
     );
 }
 
-// Per-point model forecast of MLD, with its own month picker (independent of the date slider)
-function ForecastLayerRow({
-    info,
-    variable,
-    checked,
-    onCheckedChange,
-    month,
-    onMonthChange,
-    opacity,
-    onOpacityChange,
-    result,
-    anomaly,
-}) {
-    const gradient = cssGradient(getColourmap(variable?.colormap, { anomaly }));
+const PREDICTED_VARIABLE = "mixed-layer-depth"; // the only variable the model predicts
 
-    return (
-        <div
-            className={`rounded-md px-2 py-1.5 transition-colors ${checked ? "bg-accent" : "hover:bg-accent/60"}`}
-        >
-            <Label
-                htmlFor="layer-mld-forecast"
-                className="flex cursor-pointer items-center gap-3 font-normal"
-            >
-                <Checkbox
-                    id="layer-mld-forecast"
-                    checked={checked}
-                    onCheckedChange={(c) => onCheckedChange(c === true)}
-                />
-                <span className="flex-1 truncate">MLD forecast (model)</span>
-                {result?.loading && (
-                    <span className="text-xs text-muted-foreground">…</span>
-                )}
-            </Label>
-
-            {checked && (
-                <div className="mt-2 space-y-2 pl-7">
-                    <select
-                        value={month}
-                        onChange={(e) => onMonthChange(e.target.value)}
-                        aria-label="Forecast month"
-                        className="w-full rounded-md border bg-background px-2 py-1 text-sm"
-                    >
-                        {info.months.map((m) => (
-                            <option key={m} value={m}>
-                                {formatMonth(m)}
-                            </option>
-                        ))}
-                    </select>
-                    <div
-                        className="h-2 w-full rounded-sm"
-                        style={{ background: gradient, opacity: opacity / 100 }}
-                    />
-                    <LegendScale
-                        range={result?.range}
-                        units={variable?.units}
-                        anomaly={anomaly}
-                    />
-                    {result?.error ? (
-                        <p className="text-xs text-destructive">
-                            No forecast for this month
-                        </p>
-                    ) : (
-                        <div className="flex items-center gap-3">
-                            <Slider
-                                value={[opacity]}
-                                onValueChange={(v) =>
-                                    onOpacityChange(sliderValue(v))
-                                }
-                                min={10}
-                                max={100}
-                                step={5}
-                                aria-label="MLD forecast opacity"
-                            />
-                            <span className="w-9 text-right text-xs tabular-nums text-muted-foreground">
-                                {opacity}%
-                            </span>
-                        </div>
-                    )}
-                    <p className="text-xs text-muted-foreground">
-                        SEAS5 run of {info.issued?.slice(0, 7)}, ensemble mean
-                    </p>
-                </div>
-            )}
-        </div>
-    );
+// Times past the last observation that the MLD prediction covers, in the same form as `times`:
+// every day (daily data) or every month, up to the end of the last predicted month
+function predictionTimes(grid, lastObserved, daily) {
+    if (!grid?.months?.length || !lastObserved) return [];
+    const months = new Set(grid.months);
+    if (!daily) return grid.months.filter((m) => m > lastObserved);
+    const [y, m] = grid.months.at(-1).split("-").map(Number);
+    const end = new Date(Date.UTC(y, m, 0)); // last day of the last predicted month
+    const out = [];
+    const d = new Date(`${lastObserved}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + 1);
+    for (; d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+        const day = d.toISOString().slice(0, 10);
+        if (months.has(day.slice(0, 7))) out.push(day);
+    }
+    return out;
 }
 
 export default function App() {
@@ -301,7 +257,25 @@ export default function App() {
     // when the server has the daily data, otherwise in months. The latest one is the default.
     // ("month" below holds whichever: "YYYY-MM-DD" or "YYYY-MM".)
     const daily = meta.timeStep === "day" && meta.observedDays?.length > 0;
-    const months = daily ? meta.observedDays : allMonths;
+    const observedTimes = daily ? meta.observedDays : allMonths;
+
+    // Predictions: the MLD model's monthly forecast extends the timeline past the last observation
+    const forecastGrid = meta.forecastGrid;
+    const lastObserved = daily
+        ? meta.observedDays.at(-1)
+        : (meta.observedMonths?.at(-1) ?? null);
+    const futureTimes = useMemo(
+        () => predictionTimes(forecastGrid, lastObserved, daily),
+        [forecastGrid, lastObserved, daily],
+    );
+    const [showPredictions, setShowPredictions] = useState(false);
+    const months = useMemo(
+        () =>
+            showPredictions && futureTimes.length
+                ? [...observedTimes, ...futureTimes]
+                : observedTimes,
+        [showPredictions, futureTimes, observedTimes],
+    );
     const monthPos = useMemo(
         () => new Map(months.map((m, i) => [m, i])),
         [months],
@@ -313,26 +287,28 @@ export default function App() {
     const herringYear = month ? Number(month.slice(0, 4)) : null;
     const mapMonth = useDebounced(month, 150); // don't fetch every day the slider passes over
 
+    // Past the last observation only the MLD prediction exists: the other layers pause
+    const inFuture = !!(lastObserved && month && month > lastObserved);
+    const mapInFuture = !!(lastObserved && mapMonth && mapMonth > lastObserved);
+
     const results = useOceanOverlays({
-        variables: selectedVariables,
+        variables: mapInFuture ? [] : selectedVariables,
         month: mapMonth,
         anomaly,
     });
 
     const opacityOf = (id) => opacities[id] ?? DEFAULT_OPACITY;
 
-    // Per-point MLD forecast layer: drawn on top of the other layers, for its own month
-    const forecastGrid = meta.forecastGrid;
-    const [showForecast, setShowForecast] = useState(false);
-    const [pickedForecastMonth, setPickedForecastMonth] = useState(null);
-    const forecastMonth = forecastGrid?.months.includes(pickedForecastMonth)
-        ? pickedForecastMonth
-        : (forecastGrid?.months[0] ?? null);
     const forecastResult = useForecastOverlay({
-        month: showForecast ? forecastMonth : null,
+        month: mapInFuture ? mapMonth.slice(0, 7) : null,
         anomaly,
-        variable: meta.variables?.find((v) => v.id === "mixed-layer-depth"),
+        variable: meta.variables?.find((v) => v.id === PREDICTED_VARIABLE),
     });
+
+    const togglePredictions = (on) => {
+        setShowPredictions(on);
+        if (on && futureTimes.length) setPickedMonth(futureTimes[0]); // show it straight away
+    };
 
     // The history strip's region-wide spells follow the top map layer (if it was analysed)
     const spellVariable =
@@ -372,22 +348,25 @@ export default function App() {
 
     const overlays = useMemo(() => {
         if (analysisMode !== "day") return analysis.overlays ?? [];
-        const layers = selected
+        if (mapInFuture) {
+            return forecastResult.overlay
+                ? [
+                      {
+                          id: "mld-prediction",
+                          ...forecastResult.overlay,
+                          opacity: opacityOf(PREDICTED_VARIABLE) / 100,
+                      },
+                  ]
+                : [];
+        }
+        return selected
             .filter((id) => results[id]?.overlay)
             .map((id) => ({
                 id,
                 ...results[id].overlay,
                 opacity: opacityOf(id) / 100,
             }));
-        if (showForecast && forecastResult.overlay) {
-            layers.push({
-                id: "mld-forecast",
-                ...forecastResult.overlay,
-                opacity: opacityOf("mld-forecast") / 100,
-            });
-        }
-        return layers;
-    }, [selected, results, opacities, analysisMode, analysis.overlays, showForecast, forecastResult.overlay]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [selected, results, opacities, analysisMode, analysis.overlays, mapInFuture, forecastResult.overlay]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const toggleLayer = (id, on) =>
         setSelected((prev) => {
@@ -397,14 +376,17 @@ export default function App() {
 
     const monthIndex = monthPos.get(month) ?? 0;
     const isForecast =
-        !daily &&
-        month &&
-        meta.observedMonths &&
-        !meta.observedMonths.includes(month);
+        inFuture ||
+        (!daily &&
+            month &&
+            meta.observedMonths &&
+            !meta.observedMonths.includes(month));
     const enso = meta.elNinoByMonth?.get(month?.slice(0, 7));
     const forecast = isForecast ? meta.forecastByMonth?.get(month) : null;
     const loading =
-        meta.loading || Object.values(results).some((r) => r.loading);
+        meta.loading ||
+        Object.values(results).some((r) => r.loading) ||
+        (mapInFuture && forecastResult.loading);
 
     return (
         <div className="relative h-svh w-full">
@@ -458,7 +440,7 @@ export default function App() {
                                 </span>
                                 {isForecast && (
                                     <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-400">
-                                        Forecast
+                                        {inFuture ? "Prediction" : "Forecast"}
                                     </span>
                                 )}
                             </div>
@@ -477,6 +459,37 @@ export default function App() {
                                 <span>{formatMonth(months[0])}</span>
                                 <span>{formatMonth(months.at(-1))}</span>
                             </div>
+
+                            {futureTimes.length > 0 && (
+                                <div className="flex items-center justify-between gap-3">
+                                    <div className="grid gap-0.5">
+                                        <div className="flex items-center gap-1.5">
+                                            <Label
+                                                htmlFor="predictions"
+                                                className="font-normal"
+                                            >
+                                                Predictions
+                                            </Label>
+                                            <PredictionsHelp
+                                                from={futureTimes[0]}
+                                                until={futureTimes.at(-1)}
+                                                issued={forecastGrid?.issued}
+                                            />
+                                        </div>
+                                        <span className="text-xs text-muted-foreground">
+                                            Mixed layer depth to{" "}
+                                            {formatMonth(futureTimes.at(-1).slice(0, 7))}
+                                        </span>
+                                    </div>
+                                    <Switch
+                                        id="predictions"
+                                        checked={showPredictions}
+                                        onCheckedChange={(on) =>
+                                            togglePredictions(on === true)
+                                        }
+                                    />
+                                </div>
+                            )}
 
                             {/* NOTE: even needed? */}
                             {/*
@@ -536,50 +549,57 @@ export default function App() {
                         {/* Layers */}
                         <div className="space-y-1">
                             <h2 className="mb-2 text-sm font-medium">Layers</h2>
-                            {meta.variables?.map((v) => (
-                                <LayerRow
-                                    key={v.id}
-                                    variable={v}
-                                    checked={selected.includes(v.id)}
-                                    onCheckedChange={(on) =>
-                                        toggleLayer(v.id, on)
-                                    }
-                                    opacity={opacityOf(v.id)}
-                                    onOpacityChange={(o) =>
-                                        setOpacities((prev) => ({
-                                            ...prev,
-                                            [v.id]: o,
-                                        }))
-                                    }
-                                    result={results[v.id]}
-                                    anomaly={anomaly}
-                                    onTop={
-                                        selected.length > 1 &&
-                                        selected.at(-1) === v.id
-                                    }
-                                />
-                            ))}
-                            {forecastGrid && (
-                                <ForecastLayerRow
-                                    info={forecastGrid}
-                                    variable={meta.variables?.find(
-                                        (v) => v.id === "mixed-layer-depth",
-                                    )}
-                                    checked={showForecast}
-                                    onCheckedChange={setShowForecast}
-                                    month={forecastMonth}
-                                    onMonthChange={setPickedForecastMonth}
-                                    opacity={opacityOf("mld-forecast")}
-                                    onOpacityChange={(o) =>
-                                        setOpacities((prev) => ({
-                                            ...prev,
-                                            "mld-forecast": o,
-                                        }))
-                                    }
-                                    result={forecastResult}
-                                    anomaly={anomaly}
-                                />
+                            {inFuture && (
+                                <p className="mb-1 text-xs text-muted-foreground">
+                                    Past {formatMonth(lastObserved)} there are
+                                    only predictions, for mixed layer depth.
+                                </p>
                             )}
+                            {meta.variables?.map((v) => {
+                                const predicted =
+                                    inFuture && v.id === PREDICTED_VARIABLE;
+                                return (
+                                    <LayerRow
+                                        key={v.id}
+                                        variable={v}
+                                        checked={
+                                            inFuture
+                                                ? predicted
+                                                : selected.includes(v.id)
+                                        }
+                                        onCheckedChange={(on) =>
+                                            toggleLayer(v.id, on)
+                                        }
+                                        opacity={opacityOf(v.id)}
+                                        onOpacityChange={(o) =>
+                                            setOpacities((prev) => ({
+                                                ...prev,
+                                                [v.id]: o,
+                                            }))
+                                        }
+                                        result={
+                                            predicted
+                                                ? forecastResult
+                                                : results[v.id]
+                                        }
+                                        anomaly={anomaly}
+                                        onTop={
+                                            !inFuture &&
+                                            selected.length > 1 &&
+                                            selected.at(-1) === v.id
+                                        }
+                                        disabled={inFuture && !predicted}
+                                        prediction={
+                                            predicted
+                                                ? {
+                                                      month: month.slice(0, 7),
+                                                      issued: forecastGrid?.issued,
+                                                  }
+                                                : null
+                                        }
+                                    />
+                                );
+                            })}
                         </div>
 
                         <Separator />
@@ -647,6 +667,11 @@ export default function App() {
                         spellVariable={spellVariable}
                         regionalSpells={
                             history.regionalSpells?.[spellVariable] ?? []
+                        }
+                        predictions={
+                            futureTimes.length
+                                ? { on: showPredictions, from: futureTimes[0] }
+                                : null
                         }
                     />
                 </div>

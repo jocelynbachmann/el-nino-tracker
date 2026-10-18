@@ -241,7 +241,8 @@ class DataStore:
     def effect_grid(self, event_id, slug, field):
         """One event's effect at every point for one variable, or None.
         field: onset (months after the event began, <0 = already under way), duration (months),
-        strength (peak, in SD of that point's own variability). Points with no clear change are NaN."""
+        strength (peak, in SD of that point's own variability). Points with no clear change are NaN in
+        values and 1 in the returned no_change mask."""
         ds = self.effects
         if ds is None or event_id not in ds.event.values or slug not in ds.variable.values:
             return None
@@ -254,8 +255,10 @@ class DataStore:
             v = sel["peak_z"].values
         else:
             return None
-        v = np.where(sel["detected"].values == 1, v, np.nan)
-        return ds.latitude.values, ds.longitude.values, v
+        det = sel["detected"].values
+        v = np.where(det == 1, v, np.nan)
+        no_change = np.where(det == 0, 1.0, np.nan)   # ocean that was checked: no clear change (NaN = land)
+        return ds.latitude.values, ds.longitude.values, v, no_change
 
     def typical_grid(self, phase, slug):
         """How consistently each point changed across all past events of a phase (el_nino / la_nina):

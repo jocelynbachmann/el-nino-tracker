@@ -217,7 +217,8 @@ def events():
 ANALYSIS_FIELDS = {
     "onset": {"label": "When the change started", "units": "months after the event began",
               "color_range": [-6, 18], "colormap": "plasma"},
-    "duration": {"label": "How long it lasted", "units": "months", "color_range": [0, 30], "colormap": "ylgnbu"},
+    "duration": {"label": "How long it lasted", "units": "months", "color_range": [0, 30],
+                 "colormap": "blues_visible"},
     "strength": {"label": "How unusual it got", "units": "SD of that spot's normal variability",
                  "color_range": [-4, 4], "colormap": "rdbu_r"},
 }
@@ -243,8 +244,12 @@ def event_map(event_id, variable, field):
     out = store.effect_grid(event_id, variable, field)
     if out is None:
         return error(f"No event {event_id!r}", 404)
-    resp = jsonify(grid_json(*out, variable=variable, event=event_id, field=field, **ANALYSIS_FIELDS[field]))
-    resp.headers["Cache-Control"] = "public, max-age=3600"
+    lats, lons, values, no_change = out
+    payload = grid_json(lats, lons, values, variable=variable, event=event_id, field=field, **ANALYSIS_FIELDS[field])
+    # 1 where the spot was checked but had no clear change (drawn grey), null for land / changed spots
+    payload["no_change"] = [[None if np.isnan(v) else 1 for v in row] for row in no_change]
+    resp = jsonify(payload)
+    resp.headers["Cache-Control"] = "no-cache"   # small; always fetch the latest analysis
     return resp
 
 
@@ -261,7 +266,7 @@ def typical_map(phase, variable):
     resp = jsonify(grid_json(*out, variable=variable, phase=phase, n_events=n,
                              label=f"Same change in past {phase.replace('-', ' ')}s",
                              units="share of past events", color_range=[-1, 1], colormap="rdbu_r"))
-    resp.headers["Cache-Control"] = "public, max-age=3600"
+    resp.headers["Cache-Control"] = "no-cache"   # small; always fetch the latest analysis
     return resp
 
 

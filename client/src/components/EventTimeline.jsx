@@ -4,12 +4,15 @@
  * El Niño / La Niña period shaded behind it, and a row of region-wide unusual spells below.
  * Drag to scrub the date. A click inside a shaded period selects that event (once it's selected,
  * clicks inside it pick dates). Events can also be picked from the list in the Ocean data panel.
+ * With predictions on, the strip runs past the last observation into the MLD model's forecast
+ * (hatched amber).
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatTime, PHASE_NAME, VARIABLE_WORDS } from "@/lib/eventText";
 import MinimizeButton from "@/components/MinimizeButton";
 import { HistoryHelp } from "@/components/HelpText";
 
+const PREDICTION_COLOUR = "#d97706"; // amber, like the "Prediction" badge
 const COLOURS = { el_nino: "#b2182b", la_nina: "#2166ac", neutral: "#a8a29e" };
 const SPELL_COLOURS = { above: "#d6604d", below: "#4393c3" }; // same ends as the anomaly map
 const H = 100; // svg height
@@ -22,6 +25,7 @@ const SPELL_Y = 72; // region-wide unusual spells row
 const SPELL_H = 12;
 const AXIS_Y = 97;
 const CLICK_PX = 4; // a press that moves less than this is a click, not a drag
+const MIN_PREDICTION_SHARE = 0.12; // predictions get at least this share of the width, so they're easy to scrub
 
 // "YYYY-MM" or "YYYY-MM-DD" -> ms (UTC). Months start on the 1st.
 const toMs = (s) => {
@@ -66,6 +70,9 @@ export default function EventTimeline({
     onSelectEvent,
     regionalSpells = [], // [{start, end, direction: "above"|"below", mean_sd}] for spellVariable
     spellVariable = "temperature",
+    // { on, from }: when on, the strip runs on past the observations to the end of the MLD
+    // prediction (from = first predicted time). The switch itself is in the Ocean data panel.
+    predictions = null,
     className = "",
 }) {
     const boxRef = useRef(null);
@@ -93,7 +100,16 @@ export default function EventTimeline({
     const t0 = ms[0];
     const t1 = n ? Math.max(ms[n - 1], times[n - 1].length === 7 ? nextMonthMs(times[n - 1]) : ms[n - 1]) : 0;
     const inner = Math.max(1, width - 2 * PAD_X);
-    const x = (v) => PAD_X + (inner * (v - t0)) / Math.max(1, t1 - t0);
+    // With predictions on, the predicted months are stretched to at least MIN_PREDICTION_SHARE of
+    // the width (they're a few months on a 25-year strip); the observed years share the rest.
+    const predFrom = predictions?.on && predictions.from ? toMs(predictions.from) : null;
+    const split = predFrom != null && predFrom > t0 && predFrom < t1 ? predFrom : null;
+    const share = split == null ? 0 : Math.max(MIN_PREDICTION_SHARE, (t1 - split) / Math.max(1, t1 - t0));
+    const x = (v) => {
+        if (split == null) return PAD_X + (inner * (v - t0)) / Math.max(1, t1 - t0);
+        if (v <= split) return PAD_X + (inner * (1 - share) * (v - t0)) / (split - t0);
+        return PAD_X + inner * (1 - share) + (inner * share * (v - split)) / Math.max(1, t1 - split);
+    };
     const inRange = (a, b) => b > t0 && a < t1;
 
     // Consecutive months in the same phase: shading for periods the analysis doesn't cover (pre-2002)
@@ -113,7 +129,11 @@ export default function EventTimeline({
 
     const msAt = (clientX) => {
         const r = boxRef.current.getBoundingClientRect();
-        return t0 + ((clientX - r.left - PAD_X) / inner) * (t1 - t0);
+        const f = (clientX - r.left - PAD_X) / inner; // 0..1 along the strip
+        if (split == null) return t0 + f * (t1 - t0);
+        return f <= 1 - share
+            ? t0 + (f / (1 - share)) * (split - t0)
+            : split + ((f - (1 - share)) / share) * (t1 - split);
     };
     const timeAt = (clientX) => times[nearest(ms, msAt(clientX))];
     const eventAt = (v) => spans.find((s) => v >= s.a && v < s.b)?.ev ?? null;
@@ -137,6 +157,7 @@ export default function EventTimeline({
         `${formatTime(sp.start)} to ${formatTime(sp.end)} (average ${sp.mean_sd > 0 ? "+" : ""}${sp.mean_sd} SD)`;
 
     const shown = hover ?? time;
+    const shownPredicted = predFrom != null && shown && toMs(shown) >= predFrom;
     const info = shown ? ensoByMonth.get(shown.slice(0, 7)) : null;
     const hoverEvent = hover ? eventAt(toMs(hover)) : null;
 
@@ -164,6 +185,9 @@ export default function EventTimeline({
                         shown && (
                             <>
                                 <span className="text-foreground">{formatTime(shown)}</span>
+                                {shownPredicted && (
+                                    <span className="text-amber-700 dark:text-amber-400"> · predicted mixed layer depth</span>
+                                )}
                                 {info?.oni != null && ` · ONI ${info.oni > 0 ? "+" : ""}${Number(info.oni).toFixed(1)}`}
                                 {hoverEvent
                                     ? ` · ${hoverEvent.label.replace(" (ongoing)", "")} ${PHASE_NAME[hoverEvent.phase]}${
@@ -208,6 +232,29 @@ export default function EventTimeline({
                         }}
                         onPointerLeave={() => setHover(null)}
                     >
+                        {/* predictions: hatched amber from the first predicted day to the end */}
+                        {predFrom != null && predFrom < t1 && (
+                            <g style={{ pointerEvents: "none" }}>
+                                <defs>
+                                    <pattern id="prediction-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                                        <rect width="6" height="6" fill={PREDICTION_COLOUR} opacity={0.08} />
+                                        <line x1="0" y1="0" x2="0" y2="6" stroke={PREDICTION_COLOUR} strokeWidth="2" opacity={0.35} />
+                                    </pattern>
+                                </defs>
+                                <rect
+                                    x={x(predFrom)}
+                                    y={BAND_Y}
+                                    width={Math.max(2, x(t1) - x(predFrom))}
+                                    height={SPELL_Y + SPELL_H - BAND_Y}
+                                    fill="url(#prediction-hatch)"
+                                />
+                                <line x1={x(predFrom)} x2={x(predFrom)} y1={BAND_Y} y2={SPELL_Y + SPELL_H} stroke={PREDICTION_COLOUR} strokeDasharray="3 2" />
+                                <text x={(x(predFrom) + x(t1)) / 2} y={AXIS_Y} textAnchor="middle" fontSize={11} fill={PREDICTION_COLOUR}>
+                                    Predicted
+                                </text>
+                            </g>
+                        )}
+
                         {/* older ENSO periods (before the analysis starts): light, not clickable */}
                         {runs
                             .filter((r) => inRange(r.start, r.end) && !spans.some((s) => s.a < r.end && s.b > r.start))

@@ -6,3 +6,6 @@ __pycache__/
 # processed data is copied from the team bucket, never committed
 data/
 *.zarr/
+# model outputs: the copy that matters is on S3 (processed/), these are local scratch copies
+future/clean/forecast_mld_grid.json
+future/clean/mld_forecast_*.csv
