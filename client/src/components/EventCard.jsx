@@ -56,14 +56,14 @@ function MapLegend({ mode, event, variable, analysis }) {
     const midPos = mode === "onset" ? "25%" : "50%";
 
     return (
-        <div className="mt-3 space-y-1.5">
-            <p className="text-xs font-medium">{text.title}</p>
-            {analysis.loading && <p className="text-xs text-muted-foreground">Loading…</p>}
-            {analysis.error && <p className="text-xs text-destructive">Couldn't load this map.</p>}
+        <div className="mt-2 space-y-1">
+            <p className="text-[11px] font-medium">{text.title}</p>
+            {analysis.loading && <p className="text-[11px] text-muted-foreground">Loading…</p>}
+            {analysis.error && <p className="text-[11px] text-destructive">Couldn't load this map.</p>}
             {gradient && (
                 <>
                     <div className="h-2 w-full rounded-sm" style={{ background: gradient }} />
-                    <div className="relative h-4 text-[11px] text-muted-foreground">
+                    <div className="relative h-4 text-[10px] text-muted-foreground">
                         <span className="absolute left-0">{text.left}</span>
                         {text.mid && (
                             <span className="absolute -translate-x-1/2" style={{ left: midPos }}>
@@ -75,7 +75,7 @@ function MapLegend({ mode, event, variable, analysis }) {
                 </>
             )}
             {analysis.hasNoChange && (
-                <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <p className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
                     <span
                         className="inline-block h-3 w-4 rounded-sm border border-border"
                         style={{
@@ -87,11 +87,11 @@ function MapLegend({ mode, event, variable, analysis }) {
                 </p>
             )}
             {analysis.empty ? (
-                <p className="text-xs text-muted-foreground">
+                <p className="text-[11px] text-muted-foreground">
                     {event.ongoing ? "Too early to tell for this event." : "No clear change anywhere for this variable."}
                 </p>
             ) : (
-                text.note && <p className="text-[11px] text-muted-foreground">{text.note}</p>
+                text.note && <p className="text-[10px] text-muted-foreground">{text.note}</p>
             )}
         </div>
     );
@@ -118,13 +118,13 @@ export default function EventCard({
     const showingPeak = mapTime === peakTime;
 
     return (
-        <div className={`rounded-lg bg-background/90 p-4 shadow-md backdrop-blur ${className}`} style={style}>
+        <div className={`rounded-lg bg-background/90 p-3 shadow-md backdrop-blur ${className}`} style={style}>
             <div className="flex items-start justify-between gap-3">
                 <div>
-                    <h2 className="text-base font-medium">
+                    <h2 className="text-sm font-semibold">
                         {event.label.replace(" (ongoing)", "")} {name}
                     </h2>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-[11px] text-muted-foreground">
                         {formatYm(event.start)} – {event.ongoing ? "now" : formatYm(event.end)} · {event.strength}
                         {event.ongoing ? " so far" : ""} · {event.ongoing ? "highest" : "peak"} ONI{" "}
                         {event.peak_oni > 0 ? "+" : ""}
@@ -151,16 +151,16 @@ export default function EventCard({
             {open && (
                 <>
             {event.ongoing && (
-                <p className="mt-2 rounded bg-amber-500/15 px-2 py-1 text-xs text-amber-800 dark:text-amber-300">
+                <p className="mt-2 rounded bg-amber-500/15 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-300">
                     Still under way. These are early signs, not the full picture.
                 </p>
             )}
 
-            <ul className="mt-3 space-y-2.5">
+            <ul className="mt-2 space-y-1.5">
                 {ORDER.filter((slug) => event.effects?.[slug]).map((slug) => {
                     const d = describeEffect(slug, event.effects[slug], event.phase, { ongoing: event.ongoing });
                     return (
-                        <li key={slug} className="text-sm">
+                        <li key={slug} className="text-[13px]">
                             <div className="flex items-baseline gap-2">
                                 <span
                                     className="inline-block size-2 shrink-0 translate-y-[-1px] rounded-full"
@@ -170,15 +170,15 @@ export default function EventCard({
                                 <span className={d.status === "clear" ? "" : "text-muted-foreground"}>{d.headline}</span>
                             </div>
                             {d.status === "clear" && (
-                                <p className="mt-0.5 pl-4 text-xs leading-relaxed text-muted-foreground">{d.detail}</p>
+                                <p className="mt-0.5 pl-4 text-[11px] leading-snug text-muted-foreground">{d.detail}</p>
                             )}
                         </li>
                     );
                 })}
             </ul>
 
-            <div className="mt-4 border-t border-border pt-3">
-                <p className="mb-1.5 text-xs text-muted-foreground">
+            <div className="mt-3 border-t border-border pt-2">
+                <p className="mb-1.5 text-[11px] text-muted-foreground">
                     Map shows{mapMode !== "day" && ` · ${VARIABLE_WORDS[analysisVariable]?.label.toLowerCase()}`}
                 </p>
                 <div className="grid grid-cols-4 gap-1" role="radiogroup" aria-label="What the map shows">
@@ -189,7 +189,7 @@ export default function EventCard({
                             role="radio"
                             aria-checked={mapMode === m.id}
                             onClick={() => onMapModeChange?.(m.id)}
-                            className={`rounded-md border px-1.5 py-1 text-[11px] font-medium leading-tight ${
+                            className={`rounded-md border px-1.5 py-1 text-[10px] font-medium leading-tight ${
                                 mapMode === m.id
                                     ? "border-foreground bg-foreground text-background"
                                     : "border-border hover:bg-muted"
@@ -202,7 +202,7 @@ export default function EventCard({
                 <MapLegend mode={mapMode} event={event} variable={analysisVariable} analysis={analysis} />
             </div>
 
-            <div className="mt-4 flex items-center justify-between gap-3">
+            <div className="mt-3 flex items-center justify-between gap-3">
                 <button
                     type="button"
                     onClick={() => {
@@ -210,13 +210,13 @@ export default function EventCard({
                         onShowOnMap?.(peakTime);
                     }}
                     disabled={showingPeak && mapMode === "day"}
-                    className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
+                    className="rounded-md border border-border px-3 py-1.5 text-[11px] font-medium hover:bg-muted disabled:opacity-50"
                 >
                     {showingPeak && mapMode === "day"
                         ? `Showing ${formatTime(peakTime)}`
                         : `Show ${formatTime(peakTime)} on map`}
                 </button>
-                <span className="text-right text-[11px] leading-tight text-muted-foreground">
+                <span className="text-right text-[10px] leading-tight text-muted-foreground">
                     Each spot vs its own
                     <br />
                     2003–2022 normal

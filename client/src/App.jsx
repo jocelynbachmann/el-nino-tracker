@@ -327,14 +327,16 @@ export default function App() {
     const eventMonth = selectedEvent
         ? clampMonth(eventMapTime(selectedEvent, daily ? "day" : "month"))
         : null;
-    const selectEvent = (id) => {
+    // jump: go to when the event hit hardest (from the list); a click on the timeline keeps the
+    // date that was clicked instead
+    const selectEvent = (id, { jump = true } = {}) => {
         setSelectedEventId(id);
         const ev = history.events.find((e) => e.id === id);
-        if (ev) {
+        if (ev && jump) {
             setPickedMonth(
                 clampMonth(eventMapTime(ev, daily ? "day" : "month")),
             );
-            setAnomaly(true);
+            // "Show anomaly" stays as the user set it (it used to switch on with every event opened)
         }
     };
 
@@ -663,7 +665,7 @@ export default function App() {
                         time={month}
                         onTimeChange={setPickedMonth}
                         selectedId={selectedEventId}
-                        onSelectEvent={selectEvent}
+                        onSelectEvent={(id) => selectEvent(id, { jump: false })}
                         spellVariable={spellVariable}
                         regionalSpells={
                             history.regionalSpells?.[spellVariable] ?? []
