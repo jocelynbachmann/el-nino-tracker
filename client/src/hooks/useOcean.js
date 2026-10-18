@@ -18,6 +18,8 @@ import {
 import { buildLut, getColourmap } from "@/lib/colourmap";
 import { gridToImage } from "@/lib/gridImage";
 
+const HIDDEN_LAYERS = ["current-east", "current-north"]; // layers to be left out
+
 // Metadata, ENSO labels and forecast, loaded once
 export function useOceanMeta() {
     const [state, setState] = useState({ loading: true, error: null });
@@ -36,7 +38,9 @@ export function useOceanMeta() {
                     loading: false,
                     error: null,
                     meta,
-                    variables: normalizeVariables(meta).filter((v) => v.hasMap),
+                    variables: normalizeVariables(meta).filter(
+                        (v) => v.hasMap && !HIDDEN_LAYERS.includes(v.id),
+                    ),
                     // "day" once the daily store exists: maps are fetched per day, not per month
                     timeStep: meta.time_step ?? "month",
                     observedDays: toDays(meta.observed_days),
