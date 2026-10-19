@@ -4,7 +4,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-MODEL_FILE = "train copy.py"            # the file with predict_mld() in it
+MODEL_FILE = "../train_mld_forecast.py"            # the file with predict_mld() in it
 SEAS5_CSV = "seas5_monthly_grid.csv"
 
 _model = None

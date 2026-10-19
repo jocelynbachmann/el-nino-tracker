@@ -1,5 +1,5 @@
 """
-Data checks + El Niño feature building. No model is trained here (see train copy.py).
+Data checks + El Niño feature building. No model is trained here (see model/train_mld_forecast.py).
 
 Loads the ocean/wind data and runs sanity checks on it, then turns the ONI file into
 El Niño labels, model inputs and forecast targets.
@@ -136,7 +136,7 @@ def add_time_features(df, time_col="time", t0=T0):
 def time_design_matrix(df):
     """t_years + month as 11 one-hot (1/0) columns, January being all zeros.
     Only needed for models that require plain numbers (e.g. linear regression);
-    tree models like the one in train copy.py take `month` directly."""
+    tree models like the one in model/train_mld_forecast.py take `month` directly."""
     month_dummies = pd.get_dummies(df["month"], prefix="month", drop_first=True, dtype=float)
     return pd.concat([df[["t_years"]], month_dummies], axis=1)
 

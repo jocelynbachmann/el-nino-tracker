@@ -35,7 +35,7 @@ import xarray as xr
 DEFAULT_DATA = "s3://ocean-hackathon-2026/teams/team-elnino/processed"
 DATA_DIR = os.environ.get("ELNINO_DATA", DEFAULT_DATA).rstrip("/")
 IS_S3 = DATA_DIR.startswith("s3://")
-# Written by model/train copy.py next to the SEAS5 input; used when the data folder has no copy
+# Written by model/train_mld_forecast.py next to the SEAS5 input; used when the data folder has no copy
 LOCAL_FORECAST_GRID = Path(__file__).resolve().parent.parent / "future" / "clean" / "forecast_mld_grid.json"
 
 # The box the MLD model is trained on; region time series and forecasts refer to this.
@@ -160,7 +160,7 @@ class DataStore:
                      "lower": 35.0, "upper": 49.0, "source": "model" | "climatology"}]}"""
         self.forecast = _read_json("forecast_mld.json", None)
         self.forecast_by_month = {m["month"]: m for m in (self.forecast or {}).get("months", [])}
-        # Per-point forecast maps from model/train copy.py (SEAS5 grid): forecast_mld_grid.json
+        # Per-point forecast maps from model/train_mld_forecast.py (SEAS5 grid): forecast_mld_grid.json
         # Falls back to the local copy the model writes, so it can be tried before uploading.
         self.forecast_grid = _read_json("forecast_mld_grid.json", None)
         if self.forecast_grid is None and LOCAL_FORECAST_GRID.exists():

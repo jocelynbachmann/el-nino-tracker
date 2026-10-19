@@ -7,7 +7,8 @@ What it does
      with that month's sea surface temperature, salinity, height and wind, and the MLD.
   2. Turns everything into anomalies (difference from that cell's normal for that calendar month).
   3. Compares 4 input sets x 2 model types with rolling validation (train on everything before
-     each block of years, score the block: 2001-06, 2007-12, 2013-18) and keeps the best average.
+     each block of years, score the block: 2010-12, 2013-15, 2016-18) and keeps the best average.
+     Only Argo-era data (2005 onward) is used; see START below.
   4. Scores it once on 2019-2026 against "just predict normal" (climatology), and prints a
      per-year table of errors and input anomalies to show any drift.
   5. Retrains on all years and forecasts 24 months ahead:
@@ -38,8 +39,13 @@ OUT_DIR = "ocean-hackathon-2026/teams/team-elnino/processed"
 LAT = (46, 52)            # model region, degrees north
 LON = (-134, -120)        # degrees east (negative = west)
 
-# Time splits. "Normal" comes from the pipeline's climatology files (1993-2018), which cover
-# train + validation years only, so the test years are never seen.
+# Argo era only. ARMOR3D's mixed layer before ~2002 is several metres shallower than after
+# (estimated from far fewer below-surface measurements before the Argo float network), so the
+# model trains on 2005 onward, when Argo coverage was good, and "normal" is 2005-2018 too.
+START = "2005-01-01"
+CLIM_YEARS = ("2005", "2018")   # train + validation years only, so the test years are never seen
+
+# Time splits
 VAL_END = "2019-01-01"    # before this: training + rolling validation (see FOLDS below)
                           # test: 2019 - May 2026 (scored once, at the end)
 
@@ -69,7 +75,7 @@ INPUT_SETS = {
 }
 # Rolling validation: train on everything before each block, score on the block.
 # All blocks are before 2019, so the test years stay untouched until the very end.
-FOLDS = [("2001-01-01", "2007-01-01"), ("2007-01-01", "2013-01-01"), ("2013-01-01", "2019-01-01")]
+FOLDS = [("2010-01-01", "2013-01-01"), ("2013-01-01", "2016-01-01"), ("2016-01-01", "2019-01-01")]
 SUBSAMPLE_FOR_COMPARISON = True   # use every 2nd grid cell while comparing (4x faster); final model uses all
 
 
@@ -108,7 +114,8 @@ def build_table(fs):
         np.allclose(oc.longitude, wd.longitude, atol=0.01), "ocean and wind grids don't line up"
     oc = oc.assign_coords(latitude=wd.latitude.values, longitude=wd.longitude.values)
 
-    times = np.intersect1d(oc.time.values, wd.time.values)          # Jul 1994 - May 2026
+    times = np.intersect1d(oc.time.values, wd.time.values)
+    times = times[times >= np.datetime64(START)]                     # 2005 - May 2026
     ds = xr.Dataset({
         "mld": oc.mlotst.sel(time=times), "sst": oc.to.sel(time=times),
         "sss": oc.so.sel(time=times), "ssh": oc.zo.sel(time=times),
@@ -120,16 +127,17 @@ def build_table(fs):
     print(f"table: {len(df):,} rows, {df.groupby(['latitude', 'longitude']).ngroups} ocean cells, "
           f"{df.time.min():%Y-%m} to {df.time.max():%Y-%m}")
 
-    # Normals: the SAME climatology files the server uses for every "difference from normal"
-    # (ocean 1993-2018, wind 1994-2018), so model anomalies and app anomalies share one baseline.
-    oc_clim = xr.open_zarr(f"s3://{OUT_DIR}/climatology.zarr", storage_options=opts)
-    wd_clim = xr.open_zarr(f"s3://{OUT_DIR}/wind_climatology.zarr", storage_options=opts)
-    oc_clim_fine = oc_clim[["to", "so", "zo", "mlotst"]].sel(**cut).load()
+    # Normals over CLIM_YEARS (Argo era), computed here from the monthly data.
+    # NOTE: the app's maps still use the pipeline's 1993-2018 normal until preprocess.ipynb's
+    # climatology years are changed to 2005-2018 as well.
+    period = slice(f"{CLIM_YEARS[0]}-01-01", f"{CLIM_YEARS[1]}-12-31")
+    oc_fine = ocean[["to", "so", "zo", "mlotst"]].sel(**cut, time=period).load()
+    oc_clim_fine = oc_fine.groupby("time.month").mean("time")
     regional_normal = {int(m): float(v) for m, v in zip(
         oc_clim_fine.month.values, oc_clim_fine.mlotst.mean(["latitude", "longitude"]).values)}
     occ = oc_clim_fine.coarsen(latitude=2, longitude=2, boundary="trim").mean()
     occ = occ.assign_coords(latitude=wd.latitude.values, longitude=wd.longitude.values)
-    wdc = wd_clim[["wind_speed", "eastward_wind", "northward_wind"]].sel(**cut).load()
+    wdc = wd.sel(time=period).groupby("time.month").mean("time")
     clim = xr.Dataset({
         "mld_clim": occ.mlotst, "sst_clim": occ.to, "sss_clim": occ.so, "ssh_clim": occ.zo,
         "speed_clim": wdc.wind_speed, "u_clim": wdc.eastward_wind, "v_clim": wdc.northward_wind,
@@ -149,8 +157,7 @@ def load_enso(fs):
 # STEP 3 - Normals (climatology) and anomalies
 # ======================================================================================
 def add_anomalies(df, clim=None):
-    """Normal = that cell's average for that calendar month over 1993-2018 (wind 1994-2018),
-    read from the pipeline's climatology files - the same normals the app uses everywhere.
+    """Normal = that cell's average for that calendar month over CLIM_YEARS (2005-2018).
     Inputs and target become differences from normal. The model predicts the MLD anomaly,
     and the normal is added back to get MLD in metres."""
     df = df.copy()
@@ -204,8 +211,8 @@ def make_models(feats):
     return {"linear": linear, "boosted": boosted}
 
 
-def fit(model, rows, feats):
-    w = np.where(rows.phase == "el_nino", EL_NINO_WEIGHT, 1.0)
+def fit(model, rows, feats, el_nino_weight=EL_NINO_WEIGHT):
+    w = np.where(rows.phase == "el_nino", el_nino_weight, 1.0)
     step = model.steps[-1][0] if hasattr(model, "steps") else None
     kw = {f"{step}__sample_weight": w} if step else {"sample_weight": w}
     return model.fit(rows[feats], rows.target, **kw)
@@ -252,9 +259,66 @@ def yearly_drift(rows, pred_anom):
     r = rows.assign(err=pred_anom - rows.target)
     t = r.groupby(r.time.dt.year).agg(error_m=("err", "mean"), mld_anom=("target", "mean"),
                                       sst_anom=("sst_anom", "mean"), sss_anom=("sss_anom", "mean"),
-                                      ssh_anom_cm=("ssh_anom", "mean"), speed_anom=("speed_anom", "mean"))
+                                      ssh_anom_cm=("ssh_anom", "mean"), ssh_hp_cm=("ssh_hp_anom", "mean"),
+                                      speed_anom=("speed_anom", "mean"))
     t["ssh_anom_cm"] *= 100
+    t["ssh_hp_cm"] *= 100
     return t.round(2)
+
+
+def diagnostics(df, pre, test, feats, model_name, pred_test):
+    """Checks that tell apart the possible reasons for a test-year failure."""
+    print("\n" + "=" * 88 + "\nDIAGNOSTICS (test years 2019 - May 2026, regional average unless noted)\n" + "=" * 88)
+    reg_all = df.groupby("time").agg(target=("target", "mean"))          # observed regional anomaly
+    reg_test = regional(test, pred_test)
+
+    # 1. Baselines vs model
+    rows = []
+    rows.append(("normal (1993-2018 climatology)", score(reg_test, 0 * reg_test.target)))
+    rows.append((f"model ({model_name})", score(reg_test, reg_test.pred_anom)))
+    # recent normal, updated monthly: normal + average anomaly of the previous 36 observed months
+    rolling_offset = reg_all.target.shift(1).rolling(36, min_periods=24).mean()
+    rows.append(("normal + last 36 months' offset (updated monthly)",
+                 score(reg_test, rolling_offset.reindex(reg_test.index).values)))
+    # recent normal, frozen at the start of the test period (like a long-lead forecast would be)
+    frozen = float(reg_all.target[(reg_all.index >= "2016-01-01") & (reg_all.index < VAL_END)].mean())
+    rows.append((f"normal + 2016-2018 offset ({frozen:+.2f} m, frozen)",
+                 score(reg_test, np.full(len(reg_test), frozen))))
+    # same model, no El Niño weighting
+    m_nw = fit(make_models(feats)[model_name], pre, feats, el_nino_weight=1.0)
+    pred_nw = m_nw.predict(test[feats])
+    reg_nw = regional(test, pred_nw)
+    rows.append((f"model ({model_name}) without El Niño weighting", score(reg_nw, reg_nw.pred_anom)))
+    print("\n1. Model vs simple baselines:")
+    print(pd.DataFrame({name: sc for name, sc in rows}).T.to_string())
+
+    # 2. Does the bias depend on an input? Error by low / middle / high third of each input
+    #    (thirds defined on the years before 2019). Per grid cell.
+    print("\n2. Average error (prediction - actual, m) by input range. A large difference between")
+    print("   low and high = the model's bias is tied to that input:")
+    err = pred_test - test.target.values
+    out = {}
+    for f in [c for c in feats if c.endswith("_anom")]:
+        lo, hi = pre[f].quantile([1 / 3, 2 / 3])
+        bins = pd.cut(test[f], [-np.inf, lo, hi, np.inf], labels=["low", "middle", "high"])
+        g = pd.Series(err, index=test.index).groupby(bins, observed=False)
+        out[f] = {**g.mean().round(2).to_dict(),
+                  "share_high_%": round(100 * float((bins == "high").mean()), 0)}
+    print(pd.DataFrame(out).T.to_string())
+    print("   (share_high_% is how often test months fall in the top third; ~33 = no shift)")
+
+    # 3. Reprocessed (2019-2024) vs near-real-time (2025-2026) ARMOR3D
+    print("\n3. Reprocessed vs near-real-time data:")
+    for label, sel in (("2019-2024 (reprocessed)", reg_test.index < "2025-01-01"),
+                       ("2025-2026 (near-real-time)", reg_test.index >= "2025-01-01")):
+        r = reg_test[sel]
+        print(f"   {label:27s} model {score(r, r.pred_anom)}  | mean actual anomaly "
+              f"{r.target.mean():+.2f} m, mean model error {(r.pred_anom - r.target).mean():+.2f} m")
+
+    # 4. Regional anomaly by year across the whole record (is the deep shift real/long-running?)
+    yearly = reg_all.target.groupby(reg_all.index.year).mean().round(2)
+    print("\n4. Regional MLD anomaly by year, whole record (m, + = deeper than 1993-2018 normal):")
+    print("   " + "  ".join(f"{y}:{v:+.1f}" for y, v in yearly.items()))
 
 
 def compare_and_test(df):
@@ -305,6 +369,8 @@ def compare_and_test(df):
     m_early = fit(make_models(feats)[model_name], pre[pre.time < "2013-01-01"], feats)
     late = pre[pre.time >= "2013-01-01"]
     print(yearly_drift(late, m_early.predict(late[feats])).to_string())
+
+    diagnostics(df, pre, test, feats, model_name, pred_test)
 
     sample = test.sample(min(5000, len(test)), random_state=0)
     imp = permutation_importance(model, sample[feats], sample.target, n_repeats=5, random_state=0)

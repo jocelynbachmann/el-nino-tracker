@@ -422,7 +422,7 @@ def predict_mld(temp, salinity, wind_speed, surface_height, north_wind, east_win
 #
 #   forecast_points("2027-01")    one month, one row per point: lat, lon, mld, mld_p10, mld_p90, normal
 #   save_forecast()               every month, written as forecast_mld_grid.json for the map
-#   python "train copy.py" 2027-01        save that month's points as a CSV, and the forecast
+#   python train_mld_forecast.py 2027-01   save that month's points as a CSV, and the forecast
 #
 # SEAS5 is on a 1 degree grid, 4x coarser than the model's, so:
 #   1. Each SEAS5 value is compared with the normal averaged over its 1 degree cell -> anomaly.
@@ -589,7 +589,7 @@ def save_forecast(seas5=None, upload=True):
                        "upper": grid(rows, "mld_p90"), "normal": grid(rows, "normal")})
     result = {
         "issued": str(fc.init_date.iloc[0])[:10],
-        "model": "train copy.py: HistGradientBoosting on MLD anomaly",
+        "model": "train_mld_forecast.py: HistGradientBoosting on MLD anomaly",
         "inputs": f"ECMWF SEAS5, {fc.member.nunique()} members, anomalies interpolated from 1 to 1/4 degree "
                   "(2 m air temperature stands in for SST)",
         "band": "10th-90th percentile across members",
@@ -605,7 +605,7 @@ def save_forecast(seas5=None, upload=True):
     print(f"Wrote {local}")
     if upload:
         target = f"{OUT_DIR}/{GRID_JSON}"
-        if fs.exists(target):   # keep the previous run, as train_v2.py does
+        if fs.exists(target):   # keep the previous run
             backup = f"{OUT_DIR}/backups/{GRID_JSON[:-5]}_{pd.Timestamp.now():%Y%m%d-%H%M%S}.json"
             fs.copy(target, backup)
             print(f"Previous {GRID_JSON} backed up to s3://{backup}")
@@ -616,7 +616,7 @@ def save_forecast(seas5=None, upload=True):
 
 
 if __name__ == "__main__":
-    # python "train copy.py" [YYYY-MM ...] [--no-upload]
+    # python train_mld_forecast.py [YYYY-MM ...] [--no-upload]
     args = sys.argv[1:]
     seas5 = load_seas5()
     for month in [a for a in args if not a.startswith("--")]:
