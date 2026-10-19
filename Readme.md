@@ -8,6 +8,33 @@ experimental mixed layer depth (MLD) forecast through March 2027.
 
 Built at the Victoria Ocean Hackathon 2026.
 
+![El Niño Tracker showing the 2014–16 El Niño on 25 Aug 2015, with sea surface temperature and herring spawn on](demo/app-screenshot.png)
+
+**Demo videos:** [exploring past El Niños](demo/historical-data-demo.mp4) ·
+[mixed layer depth predictions](demo/mld-predictions-demo.mp4)
+
+## Using the app
+
+- **Ocean data panel** (top right): pick a day with the date slider, choose which variables
+  colour the map (sea surface temperature, salinity, sea surface height, mixed layer depth;
+  the last one ticked is drawn on top), and turn on **Show anomaly** to colour each spot by
+  how far it is from its own normal for that time of year. The **i** next to each layer
+  explains it in plain words; **?** buttons explain each part of the app.
+- **Past El Niños and La Niñas** (in the panel, collapsed at first): pick an event to open its
+  card and jump the map to when it hit our coast hardest (the El Niño index peak plus the
+  delay before our waters respond).
+- **Event card** (top left): what the event did here, per variable, in plain words. The map
+  buttons switch between the ocean **on the day**, where the change **started**, how long it
+  **lasted**, and whether past events of the same kind did the same thing. Spots that were
+  checked but showed no clear change are striped.
+- **El Niño history strip** (bottom): the El Niño index month by month, with each El Niño and
+  La Niña shaded. Drag to change the date; click a shaded period to open it. The bottom row
+  shows when the whole region ran unusually high or low for the variable on top of the map.
+- **Herring spawn**: DFO spawning records for the year shown, as circles on the map.
+- **Predictions** (in the panel): extends the timeline to March 2027 with the model's
+  mixed layer depth forecast (striped on the history strip). Past the last observation only
+  mixed layer depth is available; the other layers switch off until you go back in time.
+
 ## How it fits together
 
 ```
@@ -40,6 +67,7 @@ earlier versions that the app doesn't use.
 | `server/` | Flask API (see [server/README.md](server/README.md) for endpoints) |
 | `client/` | React frontend (see [client/README.md](client/README.md)) |
 | `requirements.txt` | Python packages for the pipeline, model and server |
+| `demo/` | Screenshot and demo videos used in this README |
 
 ## Processed data (in `s3://ocean-hackathon-2026/teams/team-elnino/processed/`)
 
