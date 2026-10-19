@@ -1,9 +1,9 @@
 """
 monthly_grid.py - one CSV: 6 forecast months x every grid cell, ensemble-mean values.
 
-Needs merge_to_csv.py in the same folder (reuses its loaders).
+Needs merge_to_csv.py in model/forecast_inputs/ (reuses its loaders). Archived: the app uses seas5_merged_full.csv instead.
 
-Usage (PowerShell, in the `future` folder):
+Usage (PowerShell, in model/forecast_inputs):
     python monthly_grid.py
     python monthly_grid.py --ocean ocean_2026-10.grib --wind wind_ocean_2026-10.grib --out clean
 
@@ -30,6 +30,8 @@ import os
 import numpy as np
 import pandas as pd
 
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))   # merge_to_csv.py lives in model/forecast_inputs/
 from merge_to_csv import KEY, clean, load_ocean, load_wind
 
 # Names SEAS5 / C3S use for each ocean field

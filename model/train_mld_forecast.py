@@ -415,7 +415,7 @@ def predict_mld(temp, salinity, wind_speed, surface_height, north_wind, east_win
 
 
 # --- 14. Forecast MLD at every point from SEAS5 -----------------------------------------
-# Runs the model on the ECMWF SEAS5 seasonal forecast in future/clean: every one of the 51
+# Runs the model on the ECMWF SEAS5 seasonal forecast in forecast_inputs/clean: every one of the 51
 # ensemble members, for every forecast month, at every point of the model's own 1/4 degree
 # grid. The members' predictions give the forecast (their mean) and its uncertainty
 # (10th-90th percentile).
@@ -435,7 +435,8 @@ def predict_mld(temp, salinity, wind_speed, surface_height, north_wind, east_win
 # temperature stands in for it), sos -> sss, zos -> ssh, u10 -> u, v10 -> v, si10 -> speed.
 # These are not bias-corrected to the training data: check the input anomalies printed by
 # forecast_points() - a large offset that is the same everywhere is model bias, not weather.
-SEAS5_CSV = Path(__file__).resolve().parent.parent / "future" / "clean" / "seas5_merged_full.csv"
+SEAS5_CSV = Path(__file__).resolve().parent / "forecast_inputs" / "clean" / "seas5_merged_full.csv"
+OUTPUT_DIR = Path(__file__).resolve().parent / "output"   # local copies of the forecast (S3 has the one the app uses)
 GRID_JSON = "forecast_mld_grid.json"      # read by the server for the map's forecast layer
 
 # Forecast ONI / PDO for months after the observed files end, e.g. {"2026-09": 2.1, ...}
@@ -570,7 +571,7 @@ def forecast_points(month, seas5=None):
 
 def save_forecast(seas5=None, upload=True):
     """Forecast every SEAS5 month at every point and write forecast_mld_grid.json for the
-    server (to the team folder on S3, plus a local copy next to the SEAS5 file).
+    server (to the team folder on S3, plus a local copy in model/output/).
     The grid is the model's full 1/4 degree grid, south -> north and west -> east; land is null."""
     fc = load_seas5() if seas5 is None else seas5
     cells = summarize_points(predict_seas5(fc))
@@ -599,7 +600,8 @@ def save_forecast(seas5=None, upload=True):
         "months": months,
     }
 
-    local = SEAS5_CSV.parent / GRID_JSON
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    local = OUTPUT_DIR / GRID_JSON
     with open(local, "w") as f:
         json.dump(result, f)
     print(f"Wrote {local}")
@@ -621,7 +623,8 @@ if __name__ == "__main__":
     seas5 = load_seas5()
     for month in [a for a in args if not a.startswith("--")]:
         pts = forecast_points(month, seas5)
-        out = SEAS5_CSV.parent / f"mld_forecast_{month}.csv"
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        out = OUTPUT_DIR / f"mld_forecast_{month}.csv"
         pts.round(2).to_csv(out, index=False)
         print(f"MLD forecast {month}: area average {pts.mld.mean():.1f} m, normal {pts.normal.mean():.1f} m, "
               f"80% range {pts.mld_p10.mean():.1f}-{pts.mld_p90.mean():.1f} m  ({len(pts)} points) -> {out}\n")

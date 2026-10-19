@@ -36,7 +36,7 @@ DEFAULT_DATA = "s3://ocean-hackathon-2026/teams/team-elnino/processed"
 DATA_DIR = os.environ.get("ELNINO_DATA", DEFAULT_DATA).rstrip("/")
 IS_S3 = DATA_DIR.startswith("s3://")
 # Written by model/train_mld_forecast.py next to the SEAS5 input; used when the data folder has no copy
-LOCAL_FORECAST_GRID = Path(__file__).resolve().parent.parent / "future" / "clean" / "forecast_mld_grid.json"
+LOCAL_FORECAST_GRID = Path(__file__).resolve().parent.parent / "model" / "output" / "forecast_mld_grid.json"
 
 # The box the MLD model is trained on; region time series and forecasts refer to this.
 MODEL_REGION = {"south": 46.0, "north": 52.0, "west": -134.0, "east": -120.0}

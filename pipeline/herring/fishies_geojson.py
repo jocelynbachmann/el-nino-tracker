@@ -5,8 +5,9 @@ import csv
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "fish_data" / "herring-spawning.csv"
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent                     # repo root (pipeline/herring/ -> ..)
+SRC = HERE / "herring-spawning.csv"         # DFO herring spawn records, kept next to this script
 OUT = ROOT / "client" / "public" / "herring-spawn.geojson"
 
 

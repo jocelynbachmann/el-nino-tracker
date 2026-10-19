@@ -2,7 +2,7 @@
 merge_to_csv.py - merge the SEAS5 ocean (ZIP of NetCDF) and wind (GRIB) forecasts
 into clean CSV files.
 
-Usage (PowerShell, in the `future` folder):
+Usage (PowerShell, in model/forecast_inputs):
     pip install xarray cfgrib eccodes netcdf4 pandas numpy
     python merge_to_csv.py
     # or with explicit paths:

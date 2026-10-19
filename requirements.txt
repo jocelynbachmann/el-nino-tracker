@@ -1,11 +1,15 @@
-# Everything for the notebooks (model/, pipeline/) and scripts in the repo root.
-# The server only needs server/requirements.txt.
+# Everything for the pipeline and model scripts (pipeline/, model/) plus the server.
+# The server alone only needs server/requirements.txt.
 -r server/requirements.txt
-# model notebooks look up the team name through AWS STS
+# model/train_mld_forecast.py: the MLD model (gradient boosting); looks up the team name through AWS STS
+scikit-learn
 boto3
-# pipeline/preprocess.ipynb reads the raw NetCDF files
+# pipeline/: reads the raw ARMOR3D NetCDF files
 h5netcdf
-# cds_api.py downloads the C3S seasonal forecasts
+# model/forecast_inputs/: downloads the seasonal forecast, then reads it (GRIB and NetCDF)
 cdsapi
-# run the notebooks in Jupyter or VS Code
+cfgrib
+eccodes
+netCDF4
+# run pipeline/preprocess.ipynb in Jupyter or VS Code
 ipykernel
