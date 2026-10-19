@@ -11,5 +11,7 @@ cdsapi
 cfgrib
 eccodes
 netCDF4
+# downloading the public Copernicus Marine data yourself (see "Running without our S3 bucket")
+copernicusmarine
 # run pipeline/preprocess.ipynb in Jupyter or VS Code
 ipykernel

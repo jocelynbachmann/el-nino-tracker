@@ -22,6 +22,7 @@ Terms:
 """
 
 import json
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -40,24 +41,34 @@ DATA_FOLDER = "elnino"
 PROFILE = "hack-team"           # AWS profile saved during setup
 BUCKET  = "ocean-hackathon-2026"
 
-fs = s3fs.S3FileSystem(profile=PROFILE)
-opts = {"profile": PROFILE}
-
-# Work out the team name from the AWS key
-who = boto3.Session(profile_name=PROFILE).client("sts").get_caller_identity()["Arn"]
-TEAM = who.split("/")[-1]
-TEAM_DIR = f"{BUCKET}/teams/{TEAM}"             # our workspace (writable)
-DATA_DIR = f"{BUCKET}/data/{DATA_FOLDER}"       # raw data (read-only)
-OUT_DIR  = f"{TEAM_DIR}/processed"
-
-print("Connected as:", TEAM)
-print("Raw data:    ", "s3://" + DATA_DIR)
-print("Your outputs:", "s3://" + TEAM_DIR)
+# Local mode: set ELNINO_DATA to a local processed folder (the one preprocess.ipynb wrote) to
+# read inputs and write the forecast there, with no AWS account. Otherwise: the team bucket.
+LOCAL_DATA = os.environ.get("ELNINO_DATA", "")
+if LOCAL_DATA and not LOCAL_DATA.startswith("s3://"):
+    import fsspec
+    fs = fsspec.filesystem("file")
+    opts = {}
+    OUT_DIR = str(Path(LOCAL_DATA).resolve())
+    URL = ""                                    # paths are plain local paths
+    print("Local mode: reading and writing", OUT_DIR)
+else:
+    fs = s3fs.S3FileSystem(profile=PROFILE)
+    opts = {"profile": PROFILE}
+    # Work out the team name from the AWS key
+    who = boto3.Session(profile_name=PROFILE).client("sts").get_caller_identity()["Arn"]
+    TEAM = who.split("/")[-1]
+    TEAM_DIR = f"{BUCKET}/teams/{TEAM}"         # our workspace (writable)
+    DATA_DIR = f"{BUCKET}/data/{DATA_FOLDER}"   # raw data (read-only)
+    OUT_DIR  = f"{TEAM_DIR}/processed"
+    URL = "s3://"
+    print("Connected as:", TEAM)
+    print("Raw data:    ", "s3://" + DATA_DIR)
+    print("Your outputs:", "s3://" + TEAM_DIR)
 print(fs.ls(OUT_DIR))
 print("zarr version:", zarr.__version__)
 
-ocean = xr.open_zarr(f"s3://{OUT_DIR}/ocean_monthly.zarr", storage_options=opts)
-wind  = xr.open_zarr(f"s3://{OUT_DIR}/wind_monthly.zarr",  storage_options=opts)
+ocean = xr.open_zarr(f"{URL}{OUT_DIR}/ocean_monthly.zarr", storage_options=opts or None)
+wind  = xr.open_zarr(f"{URL}{OUT_DIR}/wind_monthly.zarr",  storage_options=opts or None)
 
 
 # --- 2. Cut out our box: 46-52°N, 134-120°W -------------------------------------
@@ -157,7 +168,7 @@ df["t_years"] = (df.time - T0).dt.total_seconds() / (365.25 * 24 * 3600)
 #    IRI ENSO outlook, or SEAS5 Niño 3.4), so the test score assumes a perfect ONI forecast.
 #  - Whether a month is "El Niño" depends on the following months (5-month rule), so that
 #    label is never a feature. It's used only to weight training and to score results.
-ONI_PATH = "ocean-hackathon-2026/teams/team-elnino/processed/enso.json"
+ONI_PATH = f"{OUT_DIR}/enso.json"
 EL_NINO_THRESHOLD = 0.5
 LA_NINA_THRESHOLD = -0.5
 MIN_EVENT_MONTHS = 5
@@ -262,8 +273,8 @@ for src in PDO_SOURCES:
     except Exception as e:
         print(f"PDO: couldn't read {src} ({type(e).__name__}: {e})")
 if pdo_obs is None:
-    warnings.warn("No PDO data: training without it. Upload ersst.v5.pdo.dat from NOAA to "
-                  f"s3://{PDO_SOURCES[0]} to use it.")
+    warnings.warn("No PDO data: training without it. Put ersst.v5.pdo.dat from NOAA at "
+                  f"{URL}{PDO_SOURCES[0]} to use it.")
 PDO_FEATS = ["pdo", "pdo_mean_12m"] if pdo_obs is not None else []
 if PDO_FEATS:
     df = df.merge(pdo_monthly(pdo_obs), on="ym", how="left")
@@ -609,11 +620,12 @@ def save_forecast(seas5=None, upload=True):
         target = f"{OUT_DIR}/{GRID_JSON}"
         if fs.exists(target):   # keep the previous run
             backup = f"{OUT_DIR}/backups/{GRID_JSON[:-5]}_{pd.Timestamp.now():%Y%m%d-%H%M%S}.json"
+            fs.makedirs(f"{OUT_DIR}/backups", exist_ok=True)
             fs.copy(target, backup)
-            print(f"Previous {GRID_JSON} backed up to s3://{backup}")
+            print(f"Previous {GRID_JSON} backed up to {URL}{backup}")
         with fs.open(target, "w") as f:
             json.dump(result, f)
-        print(f"Wrote s3://{target}  (the map's forecast layer reads this)")
+        print(f"Wrote {URL}{target}  (the map's forecast layer reads this)")
     return cells
 
 

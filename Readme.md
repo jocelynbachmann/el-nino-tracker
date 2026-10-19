@@ -10,8 +10,16 @@ Built at the Victoria Ocean Hackathon 2026.
 
 ![El Niño Tracker showing the 2014–16 El Niño on 25 Aug 2015, with sea surface temperature and herring spawn on](demo/app-screenshot.png)
 
-**Demo videos:** [exploring past El Niños](demo/historical-data-demo.mp4) ·
-[mixed layer depth predictions](demo/mld-predictions-demo.mp4)
+### Demo: exploring past El Niños
+
+![Opening the 2014–16 El Niño, stepping through where it started, how long it lasted and whether it was typical, then turning on herring spawn](demo/historical-data-demo.gif)
+
+### Demo: mixed layer depth predictions
+
+![Turning on Predictions and scrubbing through the mixed layer depth forecast to March 2027](demo/mld-predictions-demo.gif)
+
+Full-quality videos: [past El Niños](demo/historical-data-demo.mov) ·
+[predictions](demo/mld-predictions-demo.mov)
 
 ## Using the app
 
@@ -67,7 +75,7 @@ earlier versions that the app doesn't use.
 | `server/` | Flask API (see [server/README.md](server/README.md) for endpoints) |
 | `client/` | React frontend (see [client/README.md](client/README.md)) |
 | `requirements.txt` | Python packages for the pipeline, model and server |
-| `demo/` | Screenshot and demo videos used in this README |
+| `demo/` | Screenshot, demo GIFs and full-quality videos used in this README |
 
 ## Processed data (in `s3://ocean-hackathon-2026/teams/team-elnino/processed/`)
 
@@ -120,6 +128,81 @@ The client needs **Node.js 22** or newer and **pnpm**.
    ```
    Open the address it prints (usually http://localhost:5173). It talks to the server on
    port 5001.
+
+## Running without our S3 bucket
+
+Everything the app shows comes from public data, so you can rebuild the processed files on
+your own machine and run the app with no AWS access. You need a free
+[Copernicus Marine](https://data.marine.copernicus.eu/register) account for the ocean and wind
+data (log in once with `copernicusmarine login`) and about 5 GB of disk. The steps below
+write everything to `data/`, which git ignores.
+
+**1. Download the raw data** into `data/raw/` (from the repo root, with the venv active):
+
+```bash
+mkdir -p data/raw data/processed
+OCEAN="-v to -v so -v zo -v mlotst -v ugo -v vgo -z 0 -Z 1"   # temperature, salinity, sea level, MLD, currents; surface only
+
+# Monthly ocean (ARMOR3D), for the monthly store and the MLD model: 40-62N, 150-120W
+copernicusmarine subset -i cmems_obs-mob_glo_phy_my_0.125deg_P1M-m $OCEAN -x -150 -X -120 -y 40 -Y 62 \
+  -t 1993-01-01 -T 2024-12-31 -o data/raw -f mob_armor3d_nep_surface_1993-2024.nc
+copernicusmarine subset -i cmems_obs-mob_glo_phy_nrt_0.125deg_P1M-m $OCEAN -x -150 -X -120 -y 40 -Y 62 \
+  -t 2025-01-01 -o data/raw -f mob_armor3d_nep_surface_2025-present.nc
+
+# Monthly wind, for the MLD model
+copernicusmarine subset -i cmems_obs-wind_glo_phy_my_l4_P1M -v wind_speed -v eastward_wind \
+  -v northward_wind -v wind_stress_magnitude -x -150 -X -120 -y 40 -Y 62 -t 1994-01-01 \
+  -o data/raw -f wind_stress_nep_1994-2026.nc
+
+# Daily ocean (ARMOR3D), for the El Niño analysis and the daily maps: 46-52N, 134-120W
+copernicusmarine subset -i cmems_obs-mob_glo_phy_my_0.125deg_P1D-m $OCEAN -x -134 -X -120 -y 46 -Y 52 \
+  -t 2002-01-01 -T 2024-12-31 -o data/raw -f armor3d_daily_my.nc
+copernicusmarine subset -i cmems_obs-mob_glo_phy_nrt_0.125deg_P1D-m $OCEAN -x -134 -X -120 -y 46 -Y 52 \
+  -t 2025-01-01 -o data/raw -f armor3d_daily_nrt.nc
+python -c "import xarray as xr; ds = xr.concat([xr.open_dataset('data/raw/armor3d_daily_my.nc'), xr.open_dataset('data/raw/armor3d_daily_nrt.nc')], 'time'); ds.sel(time=~ds.get_index('time').duplicated(keep='last')).to_netcdf('data/raw/armor3d_daily_combined.nc')"
+```
+
+The other inputs need no download step:
+
+- **El Niño index (ONI):** read directly from
+  [NOAA CPC](https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt) by `preprocess.ipynb`.
+- **Pacific Decadal Oscillation:** read directly from NOAA by `train_mld_forecast.py`.
+- **Herring spawn:** already in the repo (`pipeline/herring/herring-spawning.csv`), from
+  [DFO open data](https://open.canada.ca/data/en/dataset/d892511c-d851-4f85-a0ec-708bc05d2810).
+- **Seasonal forecast** (for predictions): already in the repo under `model/forecast_inputs/`,
+  from the Copernicus Climate Data Store
+  ([single levels](https://cds.climate.copernicus.eu/datasets/seasonal-monthly-single-levels),
+  [ocean](https://cds.climate.copernicus.eu/datasets/seasonal-monthly-ocean)). To fetch a
+  newer one you need a free CDS account; see `model/forecast_inputs/README.md`.
+
+**2. Build the processed files** into `data/processed/`. The same `ELNINO_DATA` setting that
+points the server at a local folder also switches the pipeline and the model to local mode:
+
+```bash
+export ELNINO_RAW=$PWD/data/raw ELNINO_DATA=$PWD/data/processed
+export ELNINO_DAILY=$PWD/data/raw/armor3d_daily_combined.nc
+export ELNINO_ANALYSIS=$ELNINO_DATA/analysis ELNINO_ENSO=$ELNINO_DATA/enso.json
+
+# run every cell of pipeline/preprocess.ipynb in Jupyter or VS Code, started from this terminal
+# so it sees the variables above (monthly stores, enso.json, meta.json)
+python pipeline/analyze_events.py         # El Niño history analysis -> data/processed/analysis/
+python pipeline/build_daily_store.py      # daily maps -> data/processed/
+cd model/forecast_inputs && python merge_to_csv.py && python ../train_mld_forecast.py && cd ../..
+```
+
+On Windows PowerShell set each variable with `$env:ELNINO_DATA = "$PWD\data\processed"` and so on.
+
+**3. Run the app** as in "Running locally" above, skipping the AWS key step and starting the
+server with the local folder:
+
+```bash
+cd server
+ELNINO_DATA=../data/processed PRELOAD_DAILY=1 flask --app app run --debug --port 5001
+```
+
+Notes: the Copernicus dataset IDs above are the ones our code used; if one has been renamed,
+`copernicusmarine describe --contains MULTIOBS_GLO_PHY_TSUV_3D_MYNRT_015_012` lists the
+current ones. Newer data than ours shifts the dates the app shows, but nothing else changes.
 
 ## Regenerating the data
 
