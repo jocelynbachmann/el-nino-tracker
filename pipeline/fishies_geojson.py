@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "herring-spawning.csv"
+SRC = ROOT / "fish_data" / "herring-spawning.csv"
 OUT = ROOT / "client" / "public" / "herring-spawn.geojson"
 
 
